@@ -10,6 +10,8 @@ verify_ssl = true
 aiohttp = "*"
 cchardet = "*"
 aiodns = "*"
+async-lru = "*"
+pytimeparse = "*"
 
 [requires]
-python_version = "3.8"
+python_version = "3"

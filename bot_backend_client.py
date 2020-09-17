@@ -56,7 +56,7 @@ class BotBackendClient:
 
     async def discipline_event_get_all_for_user(self, user_snowflake: int):
         params = {'user_snowflake': user_snowflake}
-        req_url = self._api_url + 'discipline-event/get-discipline-events-for/'
+        req_url = self._api_url + 'discipline-event/get_discipline_events_for/'
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status != 200:
@@ -67,13 +67,37 @@ class BotBackendClient:
 
     async def discipline_event_get_latest_ban(self, user_snowflake: int):
         params = {'user_snowflake': user_snowflake, 'discipline_name': 'ban'}
-        req_url = self._api_url + 'discipline-event/is-user-banned/'
+        req_url = self._api_url + 'discipline-event/get_latest_discipline/'
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status == 404:
                     return {}, None
                 elif response.status != 200:
                     return None, f'Encountered an HTTP error retrieving {req_url}: {response.status}'
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
+    async def discipline_event_set_pardoned(self, event_id: int, is_pardoned: bool):
+        req_url = self._api_url + f'discipline-event/{event_id}/'
+        patch_data = {'is_pardoned': is_pardoned}
+        try:
+            async with self._session.patch(req_url, data=patch_data) as response:
+                if response.status != 200:
+                    return f'Got error code from server: {response.status}'
+                return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'
+
+    async def discipline_event_get_latest_by_username(self, username: str):
+        req_url = self._api_url + 'discipline-event/get_latest_discipline_by_username/'
+        params = {'username': username}
+        try:
+            async with self._session.get(req_url, params=params) as response:
+                if response.status == 404:
+                    return None, f'User by name {username} has never been disciplined'
+                elif response.status != 200:
+                    return None, f'Encountered HTTP error {response.status} when checking for user {username}'
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'

@@ -34,7 +34,7 @@ class BotBackendClient:
                                       moderator_snowflake: int,
                                       discipline_type_id: int,
                                       discipline_reason: str,
-                                      discipline_end_date: Optional[datetime]):
+                                      discipline_end_date: Optional[datetime]) -> Optional[str]:
         if discipline_end_date is not None:
             discipline_end_date = discipline_end_date.isoformat()
         post_data = {
@@ -65,8 +65,8 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
 
-    async def discipline_event_get_latest_ban(self, user_snowflake: int):
-        params = {'user_snowflake': user_snowflake, 'discipline_name': 'ban'}
+    async def discipline_event_get_latest_discipline_of_type(self, user_snowflake: int, discipline_name: str):
+        params = {'user_snowflake': user_snowflake, 'discipline_name': discipline_name}
         req_url = self._api_url + 'discipline-event/get_latest_discipline/'
         try:
             async with self._session.get(req_url, params=params) as response:

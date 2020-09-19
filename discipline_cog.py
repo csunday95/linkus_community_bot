@@ -1,13 +1,15 @@
 
-from typing import Union
-from discord import Guild, User, Member, AuditLogAction, NotFound
+from typing import Union, Tuple, Awaitable
+from discord import Guild, User, Member, AuditLogAction, NotFound, Object
 from discord.ext.commands import Cog, Context, Bot
 from discord.ext import commands
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pytimeparse.timeparse import timeparse
 from bot_backend_client import *
 
 BAN_DISCIPLINE_TYPE_NAME = 'ban'
+ADD_ROLE_DISCIPLINE_TYPE_NAME = 'add_role'
+MUTE_ROLE_DISCIPLINE_TYPE_NAME = ''
 
 # https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
 
@@ -20,7 +22,13 @@ class DisciplineCog(Cog, name='Discipline'):
         self._audit_log_cache = []
         self._audit_log_last_seen = None
 
-    async def get_discipline_type_id(self, type_name):  # cache this for now; maybe clear cache later?
+    async def get_discipline_type_id(self, type_name: str) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Pulls the database id of the discipline type matching the given name
+
+        :param type_name:
+        :return: A tuple of (int, None) with the type ID on success, (None, error) message on failure
+        """
         ban_type, err = await self._backend_client.discipline_type_get_by_name(type_name)
         if ban_type is None:
             return None, err
@@ -28,6 +36,13 @@ class DisciplineCog(Cog, name='Discipline'):
 
     @commands.Cog.listener()
     async def on_member_ban(self, guild: Guild, user: Union[User, Member]):
+        """
+        handler for member ban events; checks if this was a bot ban, and if not (ban was made by a mod in the UI), then
+        a ban entry is created with presumed perma-ban duration.
+
+        :param guild: the guild within which the ban occurred
+        :param user: the user being banned
+        """
         initiating_user, ban_reason = None, None
         banned_user = user
         # linearly search bans in audit log for this one
@@ -52,40 +67,97 @@ class DisciplineCog(Cog, name='Discipline'):
             initiating_user_id = initiating_user.id
         # create database entry if this is not bot initiated
         if initiating_user_id != self.bot.user.id:
-            await self._commit_user_banned(initiating_user_id, banned_user, ban_reason)
+            await self._commit_user_discipline(
+                initiating_user_id,
+                banned_user,
+                BAN_DISCIPLINE_TYPE_NAME,
+                ban_reason
+            )
 
     @commands.Cog.listener()
     async def on_ready(self):
         print(f'ready: {self.bot.user.id}')
 
-    async def _commit_user_banned(self, mod_user_id: int, user: User, ban_reason: str, ban_end_time: datetime = None):
-        ban_type_id, err = await self.get_discipline_type_id(BAN_DISCIPLINE_TYPE_NAME)
-        if ban_type_id is None:
-            return f'unable to retrieve type ID for ban discipline: {err}'
+    async def _commit_user_discipline(self,
+                                      mod_user_id: int,
+                                      user: Union[User, Member],
+                                      discipline_type_name: str,
+                                      reason: str,
+                                      discipline_end_time: datetime = None) -> Optional[str]:
+        """
+        Creates a DisciplineEvent entry in the database via the API.
+
+        :param mod_user_id: The snowflake of the moderating user
+        :param user: the user being disciplined as a User or Member object
+        :param discipline_type_name: the name of the discipline type being applied
+        :param reason: the reason for this discipline
+        :param discipline_end_time: the end time/date of this discipline, or None if indefinite
+        :return: None on success, an error message if failed
+        """
+        # extract the discipline database ID by name
+        discipline_type_id, err = await self.get_discipline_type_id(discipline_type_name)
+        if discipline_type_id is None:
+            return f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
+        # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
             user.id,
-            user.display_name,
+            str(user),
             mod_user_id,
-            ban_type_id,
-            ban_reason,
-            ban_end_time
+            discipline_type_id,
+            reason,
+            discipline_end_time
         )
 
-    async def _resolve_user(self, candidate_guild: Guild, user_identifier: str, database_fallback: bool = False):
+    @staticmethod
+    def _combine_reason(reason_list: Tuple[str], default: str):
+        """
+        Combines the final argument reason argument into a single string. If empty, returns the given default value.
+
+        :param reason_list: The list of strings to join
+        :param default: the default value to return if the list is empty
+        :return: the combined reason string or the default value as required
+        """
+        if len(reason_list) == 0:
+            reason = default
+        else:
+            reason = ' '.join(reason_list)
+        return reason
+
+    async def _resolve_user(self, candidate_guild: Guild, user_identifier: str, database_fallback: bool = False) -> \
+            Tuple[Optional[User], Optional[str]]:
+        """
+        Attempts to resolve the given user identifier string to a user or member object within the given Guild.
+
+        If an integer value is given, this function will assume the identifier is
+
+        :param candidate_guild:
+        :param user_identifier:
+        :param database_fallback:
+        :return:
+        """
+        # first, try getting by username
         try:
-            user_snowflake = int(user_identifier)
-            user_obj = candidate_guild.get_member(user_snowflake)
-            if user_obj is None:
-                # fall back to getting user generally
-                user_obj = self.bot.get_user(user_snowflake)
-        except ValueError:
-            # if not an int, definitely not a snowflake, try to resolve by username
             user_obj = candidate_guild.get_member_named(user_identifier)
+        except NotFound:
+            user_obj = None
+        # if username not a member, try getting as a snowflake
         if user_obj is None:
+            try:
+                user_snowflake = int(user_identifier)
+                user_obj = candidate_guild.get_member(user_snowflake)
+                if user_obj is None:
+                    # fall back to getting user generally
+                    user_obj = self.bot.get_user(user_snowflake)
+            except ValueError:
+                pass
+        # if we were unable to resolve a user/member from given identifer
+        if user_obj is None:
+            # if database_fallback was specified, see if user has been disciplined, and has a discipline event entry
             if database_fallback:
                 latest_event, err = await self._backend_client.discipline_event_get_latest_by_username(
                     username=user_identifier
                 )
+                # if an event exists for the username, extract the snowflake from that
                 if latest_event is not None:
                     try:
                         return await self.bot.fetch_user(latest_event['discord_user_snowflake']), None
@@ -95,88 +167,257 @@ class DisciplineCog(Cog, name='Discipline'):
             return None, error_message
         return user_obj, None
 
-    async def _is_user_banned(self, user_snowflake: int, user_identifier: str):
-        latest_ban, err = await self._backend_client.discipline_event_get_latest_ban(user_snowflake)
+    @staticmethod
+    async def _resolve_member(candidate_guild: Guild, user_identifier: str) -> Tuple[Optional[Member], Optional[str]]:
+        """
+        Attempts to resolve a member object from the given user identifier. First attempts to resolve by username, then
+        attempts to resolve as if user_identifier is a snowflake.
+
+        :param candidate_guild: the guild to search for the given user in
+        :param user_identifier: the identifier to attempt to resolve from
+        :return: Returns a tuple of (Member, None) on success, (None, Error Message) on failure
+        """
+        try:
+            user_obj = candidate_guild.get_member_named(user_identifier)
+        except NotFound:
+            user_obj = None
+        try:
+            user_snowflake = int(user_identifier)
+            user_obj = candidate_guild.get_member(user_snowflake)
+        except ValueError:
+            pass
+        if user_obj is None:
+            return None, f'User {user_identifier} is not currently a Member!'
+        return user_obj, None
+
+    async def _is_user_disciplined(self, user_object: Union[User, Member], discipline_type_name: str) \
+            -> Tuple[Optional[dict], Optional[str]]:
+        """
+        Checks if the given user has an active discipline of the given type according the the database.
+
+        :param user_object: The user object to check for discipline status of
+        :param discipline_type_name: the discipline type to filter by
+        :return: A tuple of (discipline event dict, None) on success, (None, error message) on failure
+        """
+        latest_discipline, err = await self._backend_client.discipline_event_get_latest_discipline_of_type(
+            user_object.id,
+            discipline_type_name
+        )
         if err is not None:
             return None, err
-        if len(latest_ban) == 0:
-            msg = f'user {user_identifier} is not currently banned.'
+        username, disc, user_id = user_object.name, user_object.discriminator, user_object.id
+        # if user has never received a discipline of this type
+        if len(latest_discipline) == 0:
+            msg = f'User {username}#{disc} [{user_id}] has not been disciplined with type {discipline_type_name}.'
             return None, msg
-        if latest_ban['is_pardoned']:
-            msg = f'user {user_identifier} has had their ban pardoned.'
+        # if the most recent discipline is pardoned
+        if latest_discipline['is_pardoned']:
+            msg = f'User {username}#{disc} [{user_id}] has had their latest' \
+                  f' discipline of type {discipline_type_name} pardoned.'
             return None, msg
-        if latest_ban['is_terminated']:
-            msg = f'user {user_identifier} was tempbanned, but the ban expired.'
+        # if the most recent discipline expired and was terminated
+        if latest_discipline['is_terminated']:
+            msg = f'User {username}#{disc} [{user_id}] had temporary' \
+                  f' discipline of type {discipline_type_name}, but it expired.'
             return None, msg
-        return latest_ban, None
+        return latest_discipline, None
+
+    async def _apply_discipline(self,
+                                ctx: Context,
+                                user_object: Union[User, Member],
+                                discipline_type_name: str,
+                                duration: Optional[str],
+                                reason: str,
+                                discord_discipline_coroutine: Optional[Awaitable]):
+        """
+        Apply the indicated discipline type to the given user for the given duration. This consists of creating a
+        discipline event entry on the database and running the discord discipline coroutine.
+
+        :param ctx: the discord bot context to execute with
+        :param user_object: the user object to discipline
+        :param discipline_type_name: the name of the discipline type to apply
+        :param duration: the duration of the discipline, or None if indefinite
+        :param reason: the reason for this discipline event
+        :param discord_discipline_coroutine: the discord related coroutine to carry out in order to enact the discipline
+        within discord.
+        """
+        end_datetime = None
+        # create database entry
+        if duration is None:
+            commit_err = await self._commit_user_discipline(
+                ctx.author.id,
+                user_object,
+                discipline_type_name,
+                reason
+            )
+        else:
+            # if duration is not none, compute discipline end date/time
+            duration_seconds = timeparse(duration)
+            if duration_seconds is None:
+                await ctx.channel.send(f'<@!{ctx.author.id}> {duration} is not a valid duration representation!')
+                return
+            duration_delta = timedelta(seconds=duration_seconds)
+            end_datetime = datetime.now() + duration_delta
+            commit_err = await self._commit_user_discipline(
+                ctx.author.id,
+                user_object,
+                discipline_type_name,
+                reason,
+                end_datetime
+            )
+        full_username = str(user_object)
+        if commit_err is None:
+            # await given discord discipline coroutine to carry out discipline discord-side
+            if discord_discipline_coroutine is not None:
+                await discord_discipline_coroutine
+            # send feedback message to moderator
+            if duration is None:
+                fmt = '<@!{author}> User {user} [{user_id}] had discipline {discipline_type} permanently' \
+                      ' applied and the action has been logged.'
+            else:
+                fmt = '<@!{author}> User {user} [{user_id}] had discipline {discipline_type} applied until {duration}' \
+                      ' and the action has been logged.'
+            await ctx.channel.send(fmt.format(
+                author=ctx.author.id,
+                user=full_username,
+                user_id=user_object.id,
+                duration=end_datetime,
+                discipline_type=discipline_type_name
+            ))
+        else:
+            # indicate we could not carry out database event creation
+            fmt = '<@!{}> User {} [{}] was not disciplined as a database entry could not be created: {}'
+            await ctx.channel.send(
+                fmt.format(ctx.author.id, full_username, user_object.id, commit_err)
+            )
+
+    async def _pardon_discipline(self,
+                                 ctx: Context,
+                                 user_object: Union[User, Member],
+                                 discipline_type_name: str,
+                                 discord_pardon_coroutine: Awaitable) -> None:
+        """
+        Pardons latest discipline of a current type if possible. The most recent discipline will be pardoned if
+        it is not already pardoned or expired.
+
+        :param ctx: the context work within
+        :param user_object: the user to pardon
+        :param discipline_type_name: the name of the discipline type to filter by
+        :param discord_pardon_coroutine: the pardoning coroutine to realize the pardon on discord side
+        """
+        latest_discipline, not_disc_reason = await self._is_user_disciplined(
+            user_object, discipline_type_name
+        )
+        if latest_discipline is None:  # if the database says they aren't disciplined
+            msg = f'<@!{ctx.author.id}> No record exists for this user being disciplined: {not_disc_reason}'
+            await ctx.channel.send(msg)
+            return
+        err = await self._backend_client.discipline_event_set_pardoned(latest_discipline['id'], True)
+        full_username = str(user_object)
+        if err is not None:
+            fmt = '<@!{}> Unable to pardon user {} [{}], user remains banned: {}'
+            await ctx.channel.send(fmt.format(ctx.author.id, full_username, user_object.id, err))
+            return
+        await discord_pardon_coroutine
+        msg = f'<@!{ctx.author.id}> User {full_username} [{user_object.id}] has ' \
+              f'had latest discipline of type {discipline_type_name} pardoned.'
+        await ctx.channel.send(msg)
 
     @commands.command()
-    async def ban(self, ctx: Context, user_identifier: str, *reason: str):
+    async def ban(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+        """
+        Carry out a permanent ban for the given user.
+
+        :param ctx: the context to work within
+        :param user_identifier: the user to ban
+        :param reason: the reason for the ban
+        """
+        # just treat as a permanent temp ban
         await self.tempban(ctx, user_identifier, None, *reason)
 
     @commands.command()
     async def unban(self, ctx: Context, user_identifier: str, *reason: str):
         """pardon a currently active ban/tempban for a user"""
-        if len(reason) == 0:
-            reason = 'unbanned by command'
-        else:
-            reason = ' '.join(reason)
         user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
         if user_obj is None:
-            ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
             return
-        target_guild = ctx.guild
-        latest_ban, not_banned_reason = await self._is_user_banned(user_obj.id, user_identifier)
-        if latest_ban is None:  # if the database says they aren't banned
-            try:
-                await target_guild.fetch_ban(user_obj)
-                await target_guild.unban(user_obj, reason)
-                fmt = 'User was unbanned, but a database inconsistency was discovered: {}'
-                not_banned_reason = fmt.format(not_banned_reason)
-            except NotFound:
-                pass
-            await ctx.channel.send(f'<@!{ctx.author.id}> {not_banned_reason}')
-            return
-        err = await self._backend_client.discipline_event_set_pardoned(latest_ban['id'], True)
-        if err is not None:
-            fmt = '<@!{}> Unable to pardon user {}, user remains banned: {}'
-            await ctx.channel.send(fmt.format(ctx.author.id, user_identifier, err))
-            return
-        await target_guild.unban(user_obj, reason=reason)
-        await ctx.channel.send(f'<@!{ctx.author.id}> User {user_identifier} has been unbanned.')
+        await self._pardon_discipline(
+            ctx, user_obj, BAN_DISCIPLINE_TYPE_NAME, ctx.guild.unban(user_obj, reason=reason)
+        )
 
     @commands.command()
-    async def tempban(self, ctx: Context, user_identifier: str, duration: Optional[str], *reason: str):
+    async def tempban(self, ctx: Context, user_identifier: str, duration: Optional[str], *reason: str) -> None:
+        """
+        Temporarily ban the given user. The duration is specified as a string like "1h30m"
+
+        :param ctx: the context to work within
+        :param user_identifier: the user to temporarily ban
+        :param duration: the duration to ban the user for, or None for indefinite ban
+        :param reason: the reason the user is being banned
+        """
+        reason = self._combine_reason(reason, 'general ban')
+        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
+        if user_obj is None:
+            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+            return
+        await self._apply_discipline(
+            ctx,
+            user_obj,
+            BAN_DISCIPLINE_TYPE_NAME,
+            duration,
+            reason,
+            ctx.guild.ban(user_obj, reason=reason)
+        )
+
+    @commands.command()
+    async def temp_add_role(self,
+                            ctx: Context,
+                            user_identifier: str,
+                            role_name: str,
+                            duration: Optional[str],
+                            *reason: str) -> None:
+        """
+        Temporarily add the given role to the given user. Role must already exist and is matched by name
+
+        :param ctx: the context to operate within
+        :param user_identifier: the user to add the role to
+        :param role_name: the role to add by name or by snowflake
+        :param duration: the duration to apply the role for, or None for indefinite
+        :param reason: the reason the role is being applied
+        """
         if len(reason) == 0:
-            reason = 'general ban'
+            reason = 'no reason provided'
         else:
             reason = ' '.join(reason)
-        user_obj, err = await self._resolve_user(ctx.guild, user_identifier)
-        if user_obj is None:
-            ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+        member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
+        if member_obj is None:
+            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
             return
-        end_datetime = None
-        if duration is None:
-            commit_err = await self._commit_user_banned(ctx.author.id, user_obj, reason)
-        else:
-            duration_seconds = timeparse(duration)
-            if duration_seconds is None:
-                ctx.channel.send(f'<@!{ctx.author.id}> {duration} is not a valid duration representation!')
+        guild_roles = ctx.guild.roles
+        matching_roles = list(filter(lambda r: r.name.lower() == role_name, guild_roles))
+        if len(matching_roles) == 0:
+            # fall back to getting role by snowflake if possible
+            try:
+                role_id = int(role_name)
+                matching_roles = [await ctx.guild.get_role(Object(role_id))]
+            except (ValueError, TypeError, NotFound):
+                await ctx.channel.send(f'<@!{ctx.author.id}> No role matching name "{role_name}" exists!')
                 return
-            duration_delta = timedelta(seconds=duration_seconds)
-            end_datetime = datetime.now() + duration_delta
-            commit_err = await self._commit_user_banned(ctx.author.id, user_obj, reason, end_datetime)
-        if commit_err is None:
-            await ctx.guild.ban(user_obj, reason=reason)
-            if duration is None:
-                fmt = '<@!{author}> User {user} was permanently banned and the ban has been logged.'
-            else:
-                fmt = '<@!{author}> User {user} was banned until {duration} and the ban has been logged.'
-            await ctx.channel.send(fmt.format(
-                author=ctx.author.id,
-                user=user_identifier,
-                duration=end_datetime
-            ))
-        else:
-            fmt = '<@!{}> User {} was not banned as a database entry could not be created: {}'
-            await ctx.channel.send(fmt.format(ctx.author.id, user_identifier, commit_err))
+        if len(matching_roles) > 1:
+            await ctx.channel.send(f'<@!{ctx.author.id}> Warning, multiple matches found for role "{role_name}"!')
+        matched_role = matching_roles[0]
+        if matched_role in member_obj.roles:
+            full_username, member_id = str(member_obj), member_obj.id
+            await ctx.channel.send(
+                f'<@!{ctx.author.id}> User {full_username} [{member_id}] already has role with name "{role_name}"!'
+            )
+            return
+        await self._apply_discipline(
+            ctx,
+            member_obj,
+            ADD_ROLE_DISCIPLINE_TYPE_NAME,
+            duration,
+            reason,
+            member_obj.add_roles(matched_role, reason=reason)
+        )

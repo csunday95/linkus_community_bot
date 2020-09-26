@@ -9,7 +9,7 @@ from bot_backend_client import *
 
 BAN_DISCIPLINE_TYPE_NAME = 'ban'
 ADD_ROLE_DISCIPLINE_TYPE_NAME = 'add_role'
-MUTE_ROLE_DISCIPLINE_TYPE_NAME = 'muted'
+MUTE_DISCORD_ROLE_NAME = 'muted'
 
 # https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
 
@@ -391,7 +391,7 @@ class DisciplineCog(Cog, name='Discipline'):
         """
         Removes a ban from the given user with the supplied reason.
 
-        :param ctx:
+        :param ctx: the context to work within
         :param user_identifier:
         :param reason:
         :return:
@@ -408,22 +408,31 @@ class DisciplineCog(Cog, name='Discipline'):
     @commands.command()
     async def add_role(self, ctx: Context, user_identifier: str, role_name: str, *reason: str) -> None:
         """
+        Adds the discord role with the matching name to the given user.
 
-        :param ctx:
-        :param user_identifier:
-        :param role_name:
-        :param reason:
-        :return:
+        :param ctx: the context to work within
+        :param user_identifier: the user to add the role to
+        :param role_name: the name of the role to add
+        :param reason: the reason this role was added
         """
         await self.temp_add_role(ctx, user_identifier, role_name, None, *reason)
 
     async def _prepare_role_changes(self, ctx: Context, user_identifier: str, role_name: str)\
             -> Tuple[Optional[Member], Optional[Role]]:
+        """
+        Performs the necessary steps to retrieve user and role objects from a guild. Will send messages in the channel
+        if an error occurs and (None, None) will be returned.
+
+        :param ctx: the context to work within
+        :param user_identifier: the user to add the role to
+        :param role_name: the name of the role being changed
+        :return: A tuple of (Member Object, Role Object) on success, (None, None) on failure.
+        """
         member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
         if member_obj is None:
             await ctx.channel.send(f'<@!{ctx.author.id}> Unable to add role: {err}')
             return None, None
-        matched_role, msg = self._resolve_role(ctx.guild, role_name)
+        matched_role, msg = await self._resolve_role(ctx.guild, role_name)
         if matched_role is None:
             # if we got an error, send message and exit
             ctx.channel.send(f'<@!{ctx.author.id}> Unable to find role: {msg}')
@@ -431,13 +440,6 @@ class DisciplineCog(Cog, name='Discipline'):
         elif msg is not None:
             # if we got a warning, issue warning and continue
             ctx.channel.send(f'<@!{ctx.author.id}> {msg}')
-        # if the user already has the given role, say so and exit
-        if matched_role in member_obj.roles:
-            full_username, member_id = str(member_obj), member_obj.id
-            await ctx.channel.send(
-                f'<@!{ctx.author.id}> User {full_username} [{member_id}] already has role with name "{role_name}"!'
-            )
-            return None, None
         return member_obj, matched_role
 
     @commands.command()
@@ -461,6 +463,14 @@ class DisciplineCog(Cog, name='Discipline'):
         else:
             reason = ' '.join(reason)
         member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
+        if member_obj is None or matched_role is None:
+            return
+        if matched_role in member_obj.roles:
+            full_username, member_id = str(member_obj), member_obj.id
+            await ctx.channel.send(
+                f'<@!{ctx.author.id}> User {full_username} [{member_id}] already has role with name "{role_name}"!'
+            )
+            return
         await self._apply_discipline(
             ctx,
             member_obj,
@@ -471,12 +481,23 @@ class DisciplineCog(Cog, name='Discipline'):
         )
 
     @commands.command()
-    async def remove_latest_role(self, ctx: Context, user_identifier: str, role_name: str, *reason: str) -> None:
+    async def remove_role(self, ctx: Context, user_identifier: str, role_name: str, *reason: str) -> None:
+        """
+        Remove the role with the matching name from the given user.
+
+        :param ctx: the discord bot context to operate in
+        :param user_identifier: the user to mute indefinitely
+        :param role_name: the name of the role to remove
+        :param reason: the reason this role was removed
+        :return:
+        """
         if len(reason) == 0:
             reason = 'no reason provided'
         else:
             reason = ' '.join(reason)
         member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
+        if member_obj is None or matched_role is None:
+            return
         await self._pardon_discipline(
             ctx,
             member_obj,
@@ -504,6 +525,16 @@ class DisciplineCog(Cog, name='Discipline'):
         :param user_identifier: the user to mute
         :param duration: the duration the mute should hold for
         :param reason: the reason this user is being muted
-        :return:
         """
-        await self.temp_add_role(ctx, user_identifier, MUTE_ROLE_DISCIPLINE_TYPE_NAME, duration, *reason)
+        await self.temp_add_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, duration, *reason)
+
+    @commands.command()
+    async def unmute(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+        """
+        Removes the configured mute role from the given user.
+
+        :param ctx: the discord bot context to operate in
+        :param user_identifier: the user to remove the mute role from
+        :param reason: the reason for the removal of the mute role
+        """
+        await self.remove_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, *reason)

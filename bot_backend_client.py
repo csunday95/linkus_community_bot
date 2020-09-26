@@ -40,7 +40,7 @@ class BotBackendClient:
         """
         params = {'name': type_name}
         try:
-            async with self._session.get(self._api_url + 'discipline-type/get_by_name/', params=params) as response:
+            async with self._session.get(self._api_url + 'discipline-type/get_by_name', params=params) as response:
                 if response.status != 200:
                     return None, f'Got error code from server: {response.status}'
                 return await response.json(), None
@@ -52,6 +52,7 @@ class BotBackendClient:
                                       user_username: str,
                                       moderator_snowflake: int,
                                       discipline_type_id: int,
+                                      discipline_content: Optional[str],
                                       discipline_reason: str,
                                       discipline_end_date: Optional[datetime]) -> Optional[str]:
         """
@@ -61,6 +62,7 @@ class BotBackendClient:
         :param user_username: The username at the time of discipline to list
         :param moderator_snowflake: the moderator user that is causing this discipline event to be created
         :param discipline_type_id: the ID of the discipline type this event instance represents
+        :param discipline_content: the content/data relevant to this discipline event if any
         :param discipline_reason: the reason for this discipline
         :param discipline_end_date: the datetime at which this discipline will become terminated, or None if
         the discipline should be indefinite
@@ -74,7 +76,8 @@ class BotBackendClient:
             "moderator_user_snowflake": moderator_snowflake,
             "reason_for_discipline": discipline_reason,
             "discipline_end_date_time": discipline_end_date,
-            "discipline_type": discipline_type_id
+            "discipline_type": discipline_type_id,
+            "discipline_content": discipline_content
         }
         req_url = self._api_url + 'discipline-event/'
         try:
@@ -87,7 +90,7 @@ class BotBackendClient:
 
     async def discipline_event_get_all_for_user(self, user_snowflake: int):
         params = {'user_snowflake': user_snowflake}
-        req_url = self._api_url + 'discipline-event/get_discipline_events_for/'
+        req_url = self._api_url + 'discipline-event/get_discipline_events_for'
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status != 200:
@@ -106,7 +109,7 @@ class BotBackendClient:
         matching discipline even was not found, the returned discipline event option will be an empty dictionary {}.
         """
         params = {'user_snowflake': user_snowflake, 'discipline_name': discipline_name}
-        req_url = self._api_url + 'discipline-event/get_latest_discipline/'
+        req_url = self._api_url + 'discipline-event/get_latest_discipline'
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status == 404:
@@ -143,7 +146,7 @@ class BotBackendClient:
         :param username: the username to search for a match of
         :return: A tuple of (discipline event dict, None) on success, (None, error message) on failure.
         """
-        req_url = self._api_url + 'discipline-event/get_latest_discipline_by_username/'
+        req_url = self._api_url + 'discipline-event/get_latest_discipline_by_username'
         params = {'username': username}
         try:
             async with self._session.get(req_url, params=params) as response:

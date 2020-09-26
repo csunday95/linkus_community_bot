@@ -83,13 +83,15 @@ class DisciplineCog(Cog, name='Discipline'):
                                       user: Union[User, Member],
                                       discipline_type_name: str,
                                       reason: str,
-                                      discipline_end_time: datetime = None) -> Optional[str]:
+                                      discipline_end_time: datetime = None,
+                                      discipline_content: str = None) -> Optional[str]:
         """
         Creates a DisciplineEvent entry in the database via the API.
 
         :param mod_user_id: The snowflake of the moderating user
         :param user: the user being disciplined as a User or Member object
         :param discipline_type_name: the name of the discipline type being applied
+        :param discipline_content: the content/data of this dicipline event
         :param reason: the reason for this discipline
         :param discipline_end_time: the end time/date of this discipline, or None if indefinite
         :return: None on success, an error message if failed
@@ -104,6 +106,7 @@ class DisciplineCog(Cog, name='Discipline'):
             str(user),
             mod_user_id,
             discipline_type_id,
+            discipline_content,
             reason,
             discipline_end_time
         )
@@ -255,7 +258,8 @@ class DisciplineCog(Cog, name='Discipline'):
                                 discipline_type_name: str,
                                 duration: Optional[str],
                                 reason: str,
-                                discord_discipline_coroutine: Optional[Awaitable]):
+                                discord_discipline_coroutine: Optional[Awaitable],
+                                discipline_content: str = None):
         """
         Apply the indicated discipline type to the given user for the given duration. This consists of creating a
         discipline event entry on the database and running the discord discipline coroutine.
@@ -267,6 +271,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param reason: the reason for this discipline event
         :param discord_discipline_coroutine: the discord related coroutine to carry out in order to enact the discipline
         within discord.
+        :param discipline_content: the discipline content/data if any
         """
         end_datetime = None
         # create database entry
@@ -275,7 +280,8 @@ class DisciplineCog(Cog, name='Discipline'):
                 ctx.author.id,
                 user_object,
                 discipline_type_name,
-                reason
+                reason,
+                discipline_content=discipline_content
             )
         else:
             # if duration is not none, compute discipline end date/time
@@ -290,7 +296,8 @@ class DisciplineCog(Cog, name='Discipline'):
                 user_object,
                 discipline_type_name,
                 reason,
-                end_datetime
+                end_datetime,
+                discipline_content
             )
         full_username = str(user_object)
         if commit_err is None:
@@ -345,9 +352,12 @@ class DisciplineCog(Cog, name='Discipline'):
             fmt = '<@!{}> Unable to pardon user {} [{}], user remains banned: {}'
             await ctx.channel.send(fmt.format(ctx.author.id, full_username, user_object.id, err))
             return
-        await discord_pardon_coroutine
+        if discord_pardon_coroutine is not None:
+            await discord_pardon_coroutine
+        content = latest_discipline['discipline_content']
+        content_str = '' if content is None else f'[{content}]'
         msg = f'<@!{ctx.author.id}> User {full_username} [{user_object.id}] has ' \
-              f'had latest discipline of type {discipline_type_name} pardoned.'
+              f'had latest discipline of type {discipline_type_name} {content_str} pardoned.'
         await ctx.channel.send(msg)
 
     @commands.command()
@@ -383,7 +393,7 @@ class DisciplineCog(Cog, name='Discipline'):
             BAN_DISCIPLINE_TYPE_NAME,
             duration,
             reason,
-            ctx.guild.ban(user_obj, reason=reason)
+            discord_discipline_coroutine=ctx.guild.ban(user_obj, reason=reason)
         )
 
     @commands.command()
@@ -477,7 +487,8 @@ class DisciplineCog(Cog, name='Discipline'):
             ADD_ROLE_DISCIPLINE_TYPE_NAME,
             duration,
             reason,
-            member_obj.add_roles(matched_role, reason=reason)
+            discord_discipline_coroutine=member_obj.add_roles(matched_role, reason=reason),
+            discipline_content=role_name
         )
 
     @commands.command()
@@ -502,7 +513,7 @@ class DisciplineCog(Cog, name='Discipline'):
             ctx,
             member_obj,
             ADD_ROLE_DISCIPLINE_TYPE_NAME,
-            await member_obj.remove_roles(matched_role, reason=reason)
+            member_obj.remove_roles(matched_role, reason=reason)
         )
 
     @commands.command()

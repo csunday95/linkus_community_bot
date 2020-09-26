@@ -571,20 +571,15 @@ class DisciplineCog(Cog, name='Discipline'):
             title='{} Discipline Status'.format(str(user_obj)),
             description='The list of active discipline events affecting user {}'.format(str(user_obj))
         )
-        discipline_type_list, err = await self._backend_client.discipline_type_get_list()
-        if err is not None:
-            ctx.channel.send(f'<@!{ctx.author.id}> Unable to retrieve discipline types: {err}')
-            return
-        discipline_type_id_map = {e['id']: e['discipline_name'] for e in discipline_type_list}
         relevant_count = 0
         for event in discipline_event_list:
             if event['is_terminated'] or event['is_pardoned']:
                 continue
             relevant_count += 1
-            discipline_type_name = discipline_type_id_map[event['discipline_type']]
+            discipline_type_name = event['discipline_type']['discipline_name']
             content = event['discipline_content']
             if content is not None and len(content) > 0:
-                field_name = '{} [{}]'.format(discipline_type_name, content)
+                field_name = '{} [{}] - EventID={}'.format(discipline_type_name, content, event['id'])
             else:
                 field_name = '{}'.format(discipline_type_name)
             moderator_user = ctx.guild.get_member(event['moderator_user_snowflake'])
@@ -612,3 +607,53 @@ class DisciplineCog(Cog, name='Discipline'):
             await ctx.channel.send(f'<@!{ctx.author.id}> {msg}')
         else:
             await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)
+
+    @commands.command()
+    async def event_details(self, ctx: Context, event_id: str):
+        try:
+            event_id = int(event_id)
+        except (ValueError, TypeError):
+            ctx.channel.send(f'<@!{ctx.author.id}> Discipline event ID must be an integer')
+            return
+        event, err = await self._backend_client.discipline_event_get(event_id)
+        if event is None:
+            ctx.channel.send(f'<@!{ctx.author.id}> Could not retrieve event with id {event_id}: {err}')
+            return
+        discipline_type = event['discipline_type']
+        disciplined_user = self.bot.get_user(event['discord_user_snowflake'])
+        output_embed = Embed(
+            title='Event {} Details'.format(event['id']),
+            description='{} for user {}'.format(discipline_type['discipline_name'], str(disciplined_user))
+        )
+        output_embed.add_field(
+            name='Disciplined User:', value=str(disciplined_user), inline=False
+        )
+        discipline_str = '{}({})'.format(discipline_type['discipline_name'], discipline_type['id'])
+        if event['discipline_content'] is not None and len(event['discipline_content']) > 0:
+            discipline_str += ' [{}]'.format(event['discipline_content'])
+        output_embed.add_field(
+            name='Discipline Type',
+            value=discipline_str,
+            inline=False
+        )
+        moderator_user = ctx.guild.get_member(event['moderator_user_snowflake'])
+        output_embed.add_field(
+            name='Moderator', value=str(moderator_user), inline=False
+        )
+        output_embed.add_field(
+            name='Reason', value=event['reason_for_discipline'], inline=False
+        )
+        output_embed.add_field(
+            name='Start Time', value=event['discipline_start_date_time'], inline=False
+        )
+        if 'discipline_end_date_time' in event and event['discipline_end_date_time'] is not None:
+            output_embed.add_field(
+                name='End Time', value=event['discipline_end_date_time'], inline=False
+            )
+        output_embed.add_field(
+            name='Is Terminated?', value='Yes' if event['is_terminated'] else 'No', inline=False
+        )
+        output_embed.add_field(
+            name='Is Pardoned?', value='Yes' if event['is_pardoned'] else 'No', inline=False
+        )
+        await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)

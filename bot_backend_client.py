@@ -88,6 +88,21 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return 'Unable to contact database'
 
+    async def discipline_event_get(self, discipline_event_id: int):
+        """
+
+        :param discipline_event_id:
+        :return:
+        """
+        req_url = self._api_url + f'discipline-event/{discipline_event_id}/'
+        try:
+            async with self._session.get(req_url) as response:
+                if response.status != 200:
+                    raise ValueError(f'Encountered an HTTP error retrieving {req_url}: {response.status}')
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
     async def discipline_event_get_all_for_user(self, user_snowflake: int):
         """
         Gets all user discipline events for a given discord user.

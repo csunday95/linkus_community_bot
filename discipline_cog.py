@@ -1,6 +1,6 @@
 
 from typing import Union, Tuple, Awaitable
-from discord import Guild, User, Member, AuditLogAction, NotFound, Object, Role
+from discord import Guild, User, Member, AuditLogAction, NotFound, Embed, Role
 from discord.ext.commands import Cog, Context, Bot
 from discord.ext import commands
 from datetime import timedelta
@@ -549,3 +549,66 @@ class DisciplineCog(Cog, name='Discipline'):
         :param reason: the reason for the removal of the mute role
         """
         await self.remove_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, *reason)
+
+    @commands.command()
+    async def status(self, ctx: Context, user_identifier: str) -> None:
+        """
+        Queries the status of the given user. Checks for and lists any active discipline events (excluding pardoned
+        or terminated ones).
+
+        :param ctx: the discord bot context to operate in
+        :param user_identifier: the user to query the status of
+        """
+        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
+        if user_obj is None:
+            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+            return
+        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(user_obj.id)
+        if err is not None:
+            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+            return
+        output_embed = Embed(
+            title='{} Discipline Status'.format(str(user_obj)),
+            description='The list of active discipline events affecting user {}'.format(str(user_obj))
+        )
+        discipline_type_list, err = await self._backend_client.discipline_type_get_list()
+        if err is not None:
+            ctx.channel.send(f'<@!{ctx.author.id}> Unable to retrieve discipline types: {err}')
+            return
+        discipline_type_id_map = {e['id']: e['discipline_name'] for e in discipline_type_list}
+        relevant_count = 0
+        for event in discipline_event_list:
+            if event['is_terminated'] or event['is_pardoned']:
+                continue
+            relevant_count += 1
+            discipline_type_name = discipline_type_id_map[event['discipline_type']]
+            content = event['discipline_content']
+            if content is not None and len(content) > 0:
+                field_name = '{} [{}]'.format(discipline_type_name, content)
+            else:
+                field_name = '{}'.format(discipline_type_name)
+            moderator_user = ctx.guild.get_member(event['moderator_user_snowflake'])
+            if moderator_user is None:
+                moderator = 'unknown [{}]'.format(event['moderator_user_snowflake'])
+            else:
+                moderator = str(moderator_user)
+            embed_value = 'Discipline of type {} issued by {} on date {}'.format(
+                discipline_type_name,
+                moderator,
+                event['discipline_start_date_time']
+            )
+            if 'discipline_end_date_time' in event \
+                    and event['discipline_end_date_time'] is not None:
+                embed_value += ' until {}.'.format(event['discipline_end_date_time'])
+            else:
+                embed_value += '.'
+            output_embed.add_field(
+                name=field_name,
+                value=embed_value,
+                inline=False
+            )
+        if relevant_count == 0:
+            msg = 'User {} does not have any active discipline events'.format(str(user_obj))
+            await ctx.channel.send(f'<@!{ctx.author.id}> {msg}')
+        else:
+            await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)

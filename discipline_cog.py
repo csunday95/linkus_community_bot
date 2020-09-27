@@ -1,5 +1,6 @@
 
 from typing import Union, Tuple, Awaitable
+import asyncio
 from discord import Guild, User, Member, AuditLogAction, NotFound, Embed, Role
 from discord.ext.commands import Cog, Context, Bot
 from discord.ext import commands
@@ -10,6 +11,7 @@ from bot_backend_client import *
 BAN_DISCIPLINE_TYPE_NAME = 'ban'
 ADD_ROLE_DISCIPLINE_TYPE_NAME = 'add_role'
 MUTE_DISCORD_ROLE_NAME = 'muted'
+KICK_DISCIPLINE_TYPE_NAME = 'kick'
 
 # https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
 
@@ -67,6 +69,7 @@ class DisciplineCog(Cog, name='Discipline'):
             initiating_user_id = initiating_user.id
         # create database entry if this is not bot initiated
         if initiating_user_id != self.bot.user.id:
+            # TODO: log if this creates an error
             await self._commit_user_discipline(
                 initiating_user_id,
                 banned_user,
@@ -84,22 +87,26 @@ class DisciplineCog(Cog, name='Discipline'):
                                       discipline_type_name: str,
                                       reason: str,
                                       discipline_end_time: datetime = None,
-                                      discipline_content: str = None) -> Optional[str]:
+                                      discipline_content: str = None,
+                                      immediately_terminated: bool = False) \
+            -> Tuple[Optional[dict], Optional[str]]:
         """
         Creates a DisciplineEvent entry in the database via the API.
 
         :param mod_user_id: The snowflake of the moderating user
         :param user: the user being disciplined as a User or Member object
         :param discipline_type_name: the name of the discipline type being applied
-        :param discipline_content: the content/data of this dicipline event
+        :param discipline_content: the content/data of this discipline event
         :param reason: the reason for this discipline
         :param discipline_end_time: the end time/date of this discipline, or None if indefinite
+        :param immediately_terminated: if True, this discipline event should be considered terminated the
+        moment it is created, e.g. when a user is kicked.
         :return: None on success, an error message if failed
         """
         # extract the discipline database ID by name
         discipline_type_id, err = await self.get_discipline_type_id(discipline_type_name)
         if discipline_type_id is None:
-            return f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
+            return None, f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
         # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
             user.id,
@@ -108,7 +115,8 @@ class DisciplineCog(Cog, name='Discipline'):
             discipline_type_id,
             discipline_content,
             reason,
-            discipline_end_time
+            discipline_end_time,
+            immediately_terminated=immediately_terminated
         )
 
     @staticmethod
@@ -276,7 +284,8 @@ class DisciplineCog(Cog, name='Discipline'):
         end_datetime = None
         # create database entry
         if duration is None:
-            commit_err = await self._commit_user_discipline(
+            duration_seconds = 0
+            created_event, commit_err = await self._commit_user_discipline(
                 ctx.author.id,
                 user_object,
                 discipline_type_name,
@@ -289,15 +298,21 @@ class DisciplineCog(Cog, name='Discipline'):
             if duration_seconds is None:
                 await ctx.channel.send(f'<@!{ctx.author.id}> {duration} is not a valid duration representation!')
                 return
-            duration_delta = timedelta(seconds=duration_seconds)
-            end_datetime = datetime.now() + duration_delta
-            commit_err = await self._commit_user_discipline(
+            if duration_seconds == 0:
+                end_datetime = datetime.now()
+                immediately_terminated = True
+            else:
+                duration_delta = timedelta(seconds=duration_seconds)
+                end_datetime = datetime.now() + duration_delta
+                immediately_terminated = False
+            created_event, commit_err = await self._commit_user_discipline(
                 ctx.author.id,
                 user_object,
                 discipline_type_name,
                 reason,
                 end_datetime,
-                discipline_content
+                discipline_content,
+                immediately_terminated=immediately_terminated
             )
         full_username = str(user_object)
         if commit_err is None:
@@ -305,18 +320,19 @@ class DisciplineCog(Cog, name='Discipline'):
             if discord_discipline_coroutine is not None:
                 await discord_discipline_coroutine
             # send feedback message to moderator
-            if duration is None:
-                fmt = '<@!{author}> User {user} [{user_id}] had discipline {discipline_type} permanently' \
-                      ' applied and the action has been logged.'
+            if duration is None or duration_seconds == 0:
+                fmt = '<@!{author}> User `{user}` [{user_id}] had discipline `{discipline_type}` permanently' \
+                      ' applied and the action has been logged as `Discipline Event ID={event_id}`.'
             else:
-                fmt = '<@!{author}> User {user} [{user_id}] had discipline {discipline_type} applied until {duration}' \
-                      ' and the action has been logged.'
+                fmt = '<@!{author}> User `{user}` [{user_id}] had discipline `{discipline_type}` applied until ' \
+                      '{duration} and the action has been logged as `Discipline Event ID={event_id}`.'
             await ctx.channel.send(fmt.format(
                 author=ctx.author.id,
                 user=full_username,
                 user_id=user_object.id,
                 duration=end_datetime,
-                discipline_type=discipline_type_name
+                discipline_type=discipline_type_name,
+                event_id=created_event['id']
             ))
         else:
             # indicate we could not carry out database event creation
@@ -324,6 +340,13 @@ class DisciplineCog(Cog, name='Discipline'):
             await ctx.channel.send(
                 fmt.format(ctx.author.id, full_username, user_object.id, commit_err)
             )
+            # handle coroutine cancellation to prevent warning
+            task = asyncio.create_task(discord_discipline_coroutine)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _pardon_discipline(self,
                                  ctx: Context,
@@ -468,10 +491,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param duration: the duration to apply the role for, or None for indefinite
         :param reason: the reason the role is being applied
         """
-        if len(reason) == 0:
-            reason = 'no reason provided'
-        else:
-            reason = ' '.join(reason)
+        reason = self._combine_reason(reason, 'general role add')
         member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
         if member_obj is None or matched_role is None:
             return
@@ -500,12 +520,8 @@ class DisciplineCog(Cog, name='Discipline'):
         :param user_identifier: the user to mute indefinitely
         :param role_name: the name of the role to remove
         :param reason: the reason this role was removed
-        :return:
         """
-        if len(reason) == 0:
-            reason = 'no reason provided'
-        else:
-            reason = ' '.join(reason)
+        reason = self._combine_reason(reason, 'no reason given')
         member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
         if member_obj is None or matched_role is None:
             return
@@ -551,6 +567,30 @@ class DisciplineCog(Cog, name='Discipline'):
         await self.remove_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, *reason)
 
     @commands.command()
+    async def kick(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+        """
+        Kicks the given user from this discord guild. This is will be represented in the discipline database as a
+        discipline of the configured kick type that is immediately terminated.
+
+        :param ctx: the bot context to operate in
+        :param user_identifier: the user to kick form the guild
+        :param reason: the reason for this action
+        """
+        reason = self._combine_reason(reason, 'general ban')
+        member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
+        if member_obj is None:
+            await ctx.channel.send(f'<@!{ctx.author.id}> Unable to kick user: {err}')
+            return
+        await self._apply_discipline(
+            ctx=ctx,
+            user_object=member_obj,
+            discipline_type_name=KICK_DISCIPLINE_TYPE_NAME,
+            duration='0s',
+            reason=reason,
+            discord_discipline_coroutine=ctx.guild.kick(member_obj, reason=reason)
+        )
+
+    @commands.command()
     async def status(self, ctx: Context, user_identifier: str) -> None:
         """
         Queries the status of the given user. Checks for and lists any active discipline events (excluding pardoned
@@ -563,6 +603,7 @@ class DisciplineCog(Cog, name='Discipline'):
         if user_obj is None:
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
             return
+        # TODO: switch this to a new endpoint that just gets active events?
         discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(user_obj.id)
         if err is not None:
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
@@ -609,7 +650,26 @@ class DisciplineCog(Cog, name='Discipline'):
             await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)
 
     @commands.command()
-    async def event_details(self, ctx: Context, event_id: str):
+    async def history(self, ctx: Context, user_identifier: str, count: int = 10):
+        """
+        Retrieves up to count most recent discipline events for the given user. Count is 10 if not
+        provided.
+
+        :param ctx: the bot context to operate within
+        :param user_identifier: the user to look up
+        :param count: the maximum amount of items to retrieve, 10 by default and 100 max.
+        """
+        await ctx.channel.send(f'<@!{ctx.author.id}> Command not yet implemented')
+
+    @commands.command()
+    async def event_details(self, ctx: Context, event_id: str) -> None:
+        """
+        Retrieves the details for a particular discipline event and responds to the requester with
+        a detailed embed.
+
+        :param ctx: the bot context to operate within
+        :param event_id: the database id of the event to retrieve
+        """
         try:
             event_id = int(event_id)
         except (ValueError, TypeError):
@@ -620,7 +680,7 @@ class DisciplineCog(Cog, name='Discipline'):
             ctx.channel.send(f'<@!{ctx.author.id}> Could not retrieve event with id {event_id}: {err}')
             return
         discipline_type = event['discipline_type']
-        disciplined_user = self.bot.get_user(event['discord_user_snowflake'])
+        disciplined_user = await self.bot.fetch_user(event['discord_user_snowflake'])
         output_embed = Embed(
             title='Event {} Details'.format(event['id']),
             description='{} for user {}'.format(discipline_type['discipline_name'], str(disciplined_user))

@@ -13,6 +13,8 @@ class BotBackendClient:
         :param client_session: The aiohttp ClientSession instance to use
         :param api_url: the base URL to use for API requests
         """
+        # TODO: break this out to also store origin guild snowflake
+        # TODO: add overall pagination support for multiple response requests
         self._api_url = api_url
         self._session = client_session
 
@@ -54,7 +56,8 @@ class BotBackendClient:
                                       discipline_type_id: int,
                                       discipline_content: Optional[str],
                                       discipline_reason: str,
-                                      discipline_end_date: Optional[datetime]) -> Optional[str]:
+                                      discipline_end_date: Optional[datetime],
+                                      immediately_terminated: bool = False):
         """
         Creates a new discipline event instance.
 
@@ -66,7 +69,8 @@ class BotBackendClient:
         :param discipline_reason: the reason for this discipline
         :param discipline_end_date: the datetime at which this discipline will become terminated, or None if
         the discipline should be indefinite
-        :return: None on success, an error message on failure
+        :param immediately_terminated: if True, this discipline event entry will be created in a terminated state.
+        :return: A tuple of (created event dict, None) on success or (None, error message) on failure
         """
         if discipline_end_date is not None:
             discipline_end_date = discipline_end_date.isoformat()
@@ -77,22 +81,26 @@ class BotBackendClient:
             "reason_for_discipline": discipline_reason,
             "discipline_end_date_time": discipline_end_date,
             "discipline_type": discipline_type_id,
-            "discipline_content": discipline_content
+            "discipline_content": '' if discipline_content is None else discipline_content
         }
+        if immediately_terminated:
+            post_data['is_terminated'] = True
         req_url = self._api_url + 'discipline-event/'
         try:
             async with self._session.post(req_url, json=post_data) as response:
                 if response.status != 201:
-                    return f'Encountered an HTTP error retrieving {req_url}: {response.status}'
-                return None
+                    print(await response.content.read())
+                    return None, f'Encountered an HTTP error retrieving {req_url}: {response.status}'
+                return await response.json(), None
         except aiohttp.ClientConnectionError:
-            return 'Unable to contact database'
+            return None, 'Unable to contact database'
 
     async def discipline_event_get(self, discipline_event_id: int):
         """
+        Gets the discipline event dict for a particular database ID.
 
-        :param discipline_event_id:
-        :return:
+        :param discipline_event_id: the database id of the discipline event to retrieve
+        :return: A tuple of (Discipline Event Dict, None) on success, (None, error message) on failure
         """
         req_url = self._api_url + f'discipline-event/{discipline_event_id}/'
         try:
@@ -108,17 +116,25 @@ class BotBackendClient:
         Gets all user discipline events for a given discord user.
 
         :param user_snowflake: The discord snowflake to filter by.
-        :return: A tuple of (list of discpline event dicts, None) on success, or (None, error message) on failure
+        :return: A tuple of (list of discipline event dicts, None) on success, or (None, error message) on failure
         """
         params = {'user_snowflake': user_snowflake}
         req_url = self._api_url + 'discipline-event/get_discipline_events_for'
-        try:
-            async with self._session.get(req_url, params=params) as response:
-                if response.status != 200:
-                    raise ValueError(f'Encountered an HTTP error retrieving {req_url}: {response.status}')
-                return await response.json(), None
-        except aiohttp.ClientConnectionError:
-            return None, 'Unable to contact database'
+        results = []
+        while req_url is not None:
+            try:
+                async with self._session.get(req_url, params=params) as response:
+                    if response.status != 200:
+                        raise ValueError(f'Encountered an HTTP error retrieving {req_url}: {response.status}')
+                    result = await response.json()
+                    if 'next' in result:
+                        results += result['results']
+                        req_url = result['next']
+                    else:
+                        req_url = None
+            except aiohttp.ClientConnectionError:
+                return None, 'Unable to contact database'
+        return results, None
 
     async def discipline_event_get_latest_discipline_of_type(self, user_snowflake: int, discipline_name: str):
         """

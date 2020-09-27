@@ -50,6 +50,7 @@ class BotBackendClient:
             return None, 'Unable to contact database'
 
     async def discipline_event_create(self,
+                                      guild_snowflake: int,
                                       user_snowflake: int,
                                       user_username: str,
                                       moderator_snowflake: int,
@@ -61,6 +62,7 @@ class BotBackendClient:
         """
         Creates a new discipline event instance.
 
+        :param guild_snowflake: the id of the guild to create this entry for
         :param user_snowflake: The user that is being disciplined
         :param user_username: The username at the time of discipline to list
         :param moderator_snowflake: the moderator user that is causing this discipline event to be created
@@ -75,6 +77,7 @@ class BotBackendClient:
         if discipline_end_date is not None:
             discipline_end_date = discipline_end_date.isoformat()
         post_data = {
+            "discord_guild_snowflake": guild_snowflake,
             "discord_user_snowflake": user_snowflake,
             "username_when_disciplined": user_username,
             "moderator_user_snowflake": moderator_snowflake,
@@ -111,14 +114,15 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
 
-    async def discipline_event_get_all_for_user(self, user_snowflake: int):
+    async def discipline_event_get_all_for_user(self, guild_snowflake: int, user_snowflake: int):
         """
         Gets all user discipline events for a given discord user.
 
-        :param user_snowflake: The discord snowflake to filter by.
+        :param guild_snowflake: the discord snowflake to filter guild by
+        :param user_snowflake: The discord snowflake to user filter by
         :return: A tuple of (list of discipline event dicts, None) on success, or (None, error message) on failure
         """
-        params = {'user_snowflake': user_snowflake}
+        params = {'guild_snowflake': guild_snowflake, 'user_snowflake': user_snowflake}
         req_url = self._api_url + 'discipline-event/get_discipline_events_for'
         results = []
         while req_url is not None:
@@ -136,16 +140,22 @@ class BotBackendClient:
                 return None, 'Unable to contact database'
         return results, None
 
-    async def discipline_event_get_latest_discipline_of_type(self, user_snowflake: int, discipline_name: str):
+    async def discipline_event_get_latest_discipline_of_type(self,
+                                                             guild_snowflake: int,
+                                                             user_snowflake: int,
+                                                             discipline_name: str):
         """
         Attempts to get the latest discipline event applied to the given user of a given discipline type.
 
+        :param guild_snowflake: the guild to search under
         :param user_snowflake: the user to search under
         :param discipline_name: the name of the discipline type to search under
         :return: A tuple of (discipline event dict, None) on success, or (None, error message) on failure. If a
         matching discipline even was not found, the returned discipline event option will be an empty dictionary {}.
         """
-        params = {'user_snowflake': user_snowflake, 'discipline_name': discipline_name}
+        params = {
+            'guild_snowflake': guild_snowflake, 'user_snowflake': user_snowflake, 'discipline_name': discipline_name
+        }
         req_url = self._api_url + 'discipline-event/get_latest_discipline'
         try:
             async with self._session.get(req_url, params=params) as response:
@@ -175,16 +185,17 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return 'Unable to contact database'
 
-    async def discipline_event_get_latest_by_username(self, username: str):
+    async def discipline_event_get_latest_by_username(self, guild_snowflake: int, username: str):
         """
         Gets the latest discipline event for the given user by username. This searches for an exact, but case
         insensitive username match for which the most recent entry will be returned.
 
+        :param guild_snowflake:
         :param username: the username to search for a match of
         :return: A tuple of (discipline event dict, None) on success, (None, error message) on failure.
         """
         req_url = self._api_url + 'discipline-event/get_latest_discipline_by_username'
-        params = {'username': username}
+        params = {'guild_snowflake': guild_snowflake, 'username': username}
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status == 404:

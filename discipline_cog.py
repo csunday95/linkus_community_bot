@@ -71,6 +71,7 @@ class DisciplineCog(Cog, name='Discipline'):
         if initiating_user_id != self.bot.user.id:
             # TODO: log if this creates an error
             await self._commit_user_discipline(
+                guild.id,
                 initiating_user_id,
                 banned_user,
                 BAN_DISCIPLINE_TYPE_NAME,
@@ -82,6 +83,7 @@ class DisciplineCog(Cog, name='Discipline'):
         print(f'ready: {self.bot.user.id}')
 
     async def _commit_user_discipline(self,
+                                      guild_id: int,
                                       mod_user_id: int,
                                       user: Union[User, Member],
                                       discipline_type_name: str,
@@ -109,6 +111,7 @@ class DisciplineCog(Cog, name='Discipline'):
             return None, f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
         # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
+            guild_id,
             user.id,
             str(user),
             mod_user_id,
@@ -166,7 +169,7 @@ class DisciplineCog(Cog, name='Discipline'):
             # if database_fallback was specified, see if user has been disciplined, and has a discipline event entry
             if database_fallback:
                 latest_event, err = await self._backend_client.discipline_event_get_latest_by_username(
-                    username=user_identifier
+                    guild_snowflake=candidate_guild.id, username=user_identifier
                 )
                 # if an event exists for the username, extract the snowflake from that
                 if latest_event is not None:
@@ -228,8 +231,10 @@ class DisciplineCog(Cog, name='Discipline'):
         matched_role = matching_roles[0]
         return matched_role, warning_msg
 
-    async def _is_user_disciplined(self, user_object: Union[User, Member], discipline_type_name: str) \
-            -> Tuple[Optional[dict], Optional[str]]:
+    async def _is_user_disciplined(self,
+                                   guild: Guild,
+                                   user_object: Union[User, Member],
+                                   discipline_type_name: str) -> Tuple[Optional[dict], Optional[str]]:
         """
         Checks if the given user has an active discipline of the given type according the the database.
 
@@ -238,6 +243,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :return: A tuple of (discipline event dict, None) on success, (None, error message) on failure
         """
         latest_discipline, err = await self._backend_client.discipline_event_get_latest_discipline_of_type(
+            guild.id,
             user_object.id,
             discipline_type_name
         )
@@ -286,6 +292,7 @@ class DisciplineCog(Cog, name='Discipline'):
         if duration is None:
             duration_seconds = 0
             created_event, commit_err = await self._commit_user_discipline(
+                ctx.guild.id,
                 ctx.author.id,
                 user_object,
                 discipline_type_name,
@@ -306,6 +313,7 @@ class DisciplineCog(Cog, name='Discipline'):
                 end_datetime = datetime.now() + duration_delta
                 immediately_terminated = False
             created_event, commit_err = await self._commit_user_discipline(
+                ctx.guild.id,
                 ctx.author.id,
                 user_object,
                 discipline_type_name,
@@ -363,7 +371,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param discord_pardon_coroutine: the pardoning coroutine to realize the pardon on discord side
         """
         latest_discipline, not_disc_reason = await self._is_user_disciplined(
-            user_object, discipline_type_name
+            ctx.guild, user_object, discipline_type_name
         )
         if latest_discipline is None:  # if the database says they aren't disciplined
             msg = f'<@!{ctx.author.id}> No record exists for this user being disciplined: {not_disc_reason}'
@@ -604,7 +612,9 @@ class DisciplineCog(Cog, name='Discipline'):
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
             return
         # TODO: switch this to a new endpoint that just gets active events?
-        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(user_obj.id)
+        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(
+            ctx.guild.id, user_obj.id
+        )
         if err is not None:
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
             return

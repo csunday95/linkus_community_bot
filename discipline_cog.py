@@ -1,6 +1,7 @@
 
 from typing import Union, Tuple, Awaitable
 import asyncio
+import uuid
 from discord import Guild, User, Member, AuditLogAction, NotFound, Embed, Role
 from discord.ext.commands import Cog, Context, Bot
 from discord.ext import commands
@@ -65,14 +66,17 @@ class DisciplineCog(Cog, name='Discipline'):
             ban_reason = ban_entry.reason
         if initiating_user is None:
             initiating_user_id = 0  # fall back to zero if ban isn't found in audit log
+            initiating_username = 'NULL'
         else:
             initiating_user_id = initiating_user.id
+            initiating_username = str(initiating_user)
         # create database entry if this is not bot initiated
         if initiating_user_id != self.bot.user.id:
             # TODO: log if this creates an error
             await self._commit_user_discipline(
-                guild.id,
+                guild,
                 initiating_user_id,
+                initiating_username,
                 banned_user,
                 BAN_DISCIPLINE_TYPE_NAME,
                 ban_reason
@@ -83,8 +87,9 @@ class DisciplineCog(Cog, name='Discipline'):
         print(f'ready: {self.bot.user.id}')
 
     async def _commit_user_discipline(self,
-                                      guild_id: int,
+                                      guild: Guild,
                                       mod_user_id: int,
+                                      mod_username: str,
                                       user: Union[User, Member],
                                       discipline_type_name: str,
                                       reason: str,
@@ -111,10 +116,12 @@ class DisciplineCog(Cog, name='Discipline'):
             return None, f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
         # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
-            guild_id,
+            guild.id,
+            guild.name,
             user.id,
             str(user),
             mod_user_id,
+            mod_username,
             discipline_type_id,
             discipline_content,
             reason,
@@ -231,6 +238,46 @@ class DisciplineCog(Cog, name='Discipline'):
         matched_role = matching_roles[0]
         return matched_role, warning_msg
 
+    @staticmethod
+    def _generate_event_embed(guild: Guild, disciplined_user: Union[User, Member], event: dict):
+        discipline_type = event['discipline_type']
+        output_embed = Embed(
+            title='Event {} Details'.format(event['id']),
+            description='{} for user {}'.format(discipline_type['discipline_name'], str(disciplined_user))
+        )
+        output_embed.add_field(
+            name='Disciplined User:', value=str(disciplined_user), inline=False
+        )
+        discipline_str = '{}({})'.format(discipline_type['discipline_name'], discipline_type['id'])
+        if event['discipline_content'] is not None and len(event['discipline_content']) > 0:
+            discipline_str += ' [{}]'.format(event['discipline_content'])
+        output_embed.add_field(
+            name='Discipline Type',
+            value=discipline_str,
+            inline=False
+        )
+        moderator_user = guild.get_member(event['moderator_user_snowflake'])
+        output_embed.add_field(
+            name='Moderator', value=str(moderator_user), inline=False
+        )
+        output_embed.add_field(
+            name='Reason', value=event['reason_for_discipline'], inline=False
+        )
+        output_embed.add_field(
+            name='Start Time', value=event['discipline_start_date_time'], inline=False
+        )
+        if 'discipline_end_date_time' in event and event['discipline_end_date_time'] is not None:
+            output_embed.add_field(
+                name='End Time', value=event['discipline_end_date_time'], inline=False
+            )
+        output_embed.add_field(
+            name='Is Terminated?', value='Yes' if event['is_terminated'] else 'No', inline=False
+        )
+        output_embed.add_field(
+            name='Is Pardoned?', value='Yes' if event['is_pardoned'] else 'No', inline=False
+        )
+        return output_embed
+
     async def _is_user_disciplined(self,
                                    guild: Guild,
                                    user_object: Union[User, Member],
@@ -292,8 +339,9 @@ class DisciplineCog(Cog, name='Discipline'):
         if duration is None:
             duration_seconds = 0
             created_event, commit_err = await self._commit_user_discipline(
-                ctx.guild.id,
+                ctx.guild,
                 ctx.author.id,
+                str(ctx.author),
                 user_object,
                 discipline_type_name,
                 reason,
@@ -313,8 +361,9 @@ class DisciplineCog(Cog, name='Discipline'):
                 end_datetime = datetime.now() + duration_delta
                 immediately_terminated = False
             created_event, commit_err = await self._commit_user_discipline(
-                ctx.guild.id,
+                ctx.guild,
                 ctx.author.id,
+                str(ctx.author),
                 user_object,
                 discipline_type_name,
                 reason,
@@ -330,10 +379,10 @@ class DisciplineCog(Cog, name='Discipline'):
             # send feedback message to moderator
             if duration is None or duration_seconds == 0:
                 fmt = '<@!{author}> User `{user}` [{user_id}] had discipline `{discipline_type}` permanently' \
-                      ' applied and the action has been logged as `Discipline Event ID={event_id}`.'
+                      ' applied and the action has been logged as Discipline Event ID=`{event_id}`.'
             else:
                 fmt = '<@!{author}> User `{user}` [{user_id}] had discipline `{discipline_type}` applied until ' \
-                      '{duration} and the action has been logged as `Discipline Event ID={event_id}`.'
+                      '{duration} and the action has been logged as `Discipline Event ID=`{event_id}`.'
             await ctx.channel.send(fmt.format(
                 author=ctx.author.id,
                 user=full_username,
@@ -413,7 +462,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param duration: the duration to ban the user for, or None for indefinite ban
         :param reason: the reason the user is being banned
         """
-        reason = self._combine_reason(reason, 'general ban')
+        reason = self._combine_reason(reason, 'no reason given')
         user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
         if user_obj is None:
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
@@ -437,7 +486,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param reason:
         :return:
         """
-        reason = self._combine_reason(reason, 'general unban')
+        reason = self._combine_reason(reason, 'no reason given')
         user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
         if user_obj is None:
             await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
@@ -499,7 +548,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param duration: the duration to apply the role for, or None for indefinite
         :param reason: the reason the role is being applied
         """
-        reason = self._combine_reason(reason, 'general role add')
+        reason = self._combine_reason(reason, 'no reason given')
         member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
         if member_obj is None or matched_role is None:
             return
@@ -584,7 +633,7 @@ class DisciplineCog(Cog, name='Discipline'):
         :param user_identifier: the user to kick form the guild
         :param reason: the reason for this action
         """
-        reason = self._combine_reason(reason, 'general ban')
+        reason = self._combine_reason(reason, 'no reason given')
         member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
         if member_obj is None:
             await ctx.channel.send(f'<@!{ctx.author.id}> Unable to kick user: {err}')
@@ -598,6 +647,23 @@ class DisciplineCog(Cog, name='Discipline'):
             discord_discipline_coroutine=ctx.guild.kick(member_obj, reason=reason)
         )
 
+    async def _get_all_user_events(self, ctx: Context, user_obj: Union[User, Member]):
+        """
+        Gets all user events for the given user identifier.
+
+        :param ctx: The bot context to operate within
+        :param user_obj: the user to get events for
+        :return: A tuple of (event list, None) on success, or (None, err message) on failure
+        """
+
+        # TODO: switch this to a new endpoint that just gets active events?
+        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(
+            ctx.guild.id, user_obj.id
+        )
+        if err is not None:
+            return None, err
+        return discipline_event_list, None
+
     @commands.command()
     async def status(self, ctx: Context, user_identifier: str) -> None:
         """
@@ -609,15 +675,10 @@ class DisciplineCog(Cog, name='Discipline'):
         """
         user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
         if user_obj is None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-            return
-        # TODO: switch this to a new endpoint that just gets active events?
-        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(
-            ctx.guild.id, user_obj.id
-        )
+            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+        discipline_event_list, err = self._get_all_user_events(ctx, user_obj)
         if err is not None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-            return
+            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
         output_embed = Embed(
             title='{} Discipline Status'.format(str(user_obj)),
             description='The list of active discipline events affecting user {}'.format(str(user_obj))
@@ -669,7 +730,21 @@ class DisciplineCog(Cog, name='Discipline'):
         :param user_identifier: the user to look up
         :param count: the maximum amount of items to retrieve, 10 by default and 100 max.
         """
-        await ctx.channel.send(f'<@!{ctx.author.id}> Command not yet implemented')
+        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
+        if user_obj is None:
+            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+        discipline_event_list, err = await self._get_all_user_events(ctx, user_obj)
+        if err is not None:
+            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
+        await ctx.channel.send(
+            f'<@!{ctx.author.id}> The discipline event history of user {user_obj} may be seen below, newest first:'
+        )
+        for event in discipline_event_list:
+            output_embed = self._generate_event_embed(ctx.guild, user_obj, event)
+            await ctx.channel.send(
+                content='Event `{}`:'.format(event['id']),
+                embed=output_embed
+            )
 
     @commands.command()
     async def event_details(self, ctx: Context, event_id: str) -> None:
@@ -681,49 +756,18 @@ class DisciplineCog(Cog, name='Discipline'):
         :param event_id: the database id of the event to retrieve
         """
         try:
-            event_id = int(event_id)
+            event_id = uuid.UUID(event_id)
         except (ValueError, TypeError):
-            ctx.channel.send(f'<@!{ctx.author.id}> Discipline event ID must be an integer')
+            await ctx.channel.send(f'<@!{ctx.author.id}> Discipline event ID must be a valid UUID')
             return
         event, err = await self._backend_client.discipline_event_get(event_id)
         if event is None:
             ctx.channel.send(f'<@!{ctx.author.id}> Could not retrieve event with id {event_id}: {err}')
             return
-        discipline_type = event['discipline_type']
-        disciplined_user = await self.bot.fetch_user(event['discord_user_snowflake'])
-        output_embed = Embed(
-            title='Event {} Details'.format(event['id']),
-            description='{} for user {}'.format(discipline_type['discipline_name'], str(disciplined_user))
-        )
-        output_embed.add_field(
-            name='Disciplined User:', value=str(disciplined_user), inline=False
-        )
-        discipline_str = '{}({})'.format(discipline_type['discipline_name'], discipline_type['id'])
-        if event['discipline_content'] is not None and len(event['discipline_content']) > 0:
-            discipline_str += ' [{}]'.format(event['discipline_content'])
-        output_embed.add_field(
-            name='Discipline Type',
-            value=discipline_str,
-            inline=False
-        )
-        moderator_user = ctx.guild.get_member(event['moderator_user_snowflake'])
-        output_embed.add_field(
-            name='Moderator', value=str(moderator_user), inline=False
-        )
-        output_embed.add_field(
-            name='Reason', value=event['reason_for_discipline'], inline=False
-        )
-        output_embed.add_field(
-            name='Start Time', value=event['discipline_start_date_time'], inline=False
-        )
-        if 'discipline_end_date_time' in event and event['discipline_end_date_time'] is not None:
-            output_embed.add_field(
-                name='End Time', value=event['discipline_end_date_time'], inline=False
-            )
-        output_embed.add_field(
-            name='Is Terminated?', value='Yes' if event['is_terminated'] else 'No', inline=False
-        )
-        output_embed.add_field(
-            name='Is Pardoned?', value='Yes' if event['is_pardoned'] else 'No', inline=False
-        )
+        try:
+            disciplined_user_snowflake = int(event['discord_guild_snowflake'])
+        except (ValueError, TypeError):
+            return await ctx.channel.send(f'<@!{ctx.author.id}> Discipline event ID must be a valid UUID')
+        disciplined_user = await self.bot.get_user(disciplined_user_snowflake)
+        output_embed = self._generate_event_embed(ctx.guild, disciplined_user, event)
         await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)

@@ -1,12 +1,15 @@
 
 from typing import Optional
 import aiohttp
+import uuid
 from datetime import datetime
 
 
 class BotBackendClient:
     """The client for the backend API"""
-    def __init__(self,  client_session: aiohttp.ClientSession, api_url: str = 'http://localhost:8000/api/',):
+    def __init__(self,
+                 client_session: aiohttp.ClientSession,
+                 api_url: str = 'http://localhost:8000/api/'):
         """
         Creates a BotBackendClient instance.
 
@@ -51,9 +54,11 @@ class BotBackendClient:
 
     async def discipline_event_create(self,
                                       guild_snowflake: int,
+                                      guild_name: str,
                                       user_snowflake: int,
                                       user_username: str,
                                       moderator_snowflake: int,
+                                      moderator_username: str,
                                       discipline_type_id: int,
                                       discipline_content: Optional[str],
                                       discipline_reason: str,
@@ -63,9 +68,11 @@ class BotBackendClient:
         Creates a new discipline event instance.
 
         :param guild_snowflake: the id of the guild to create this entry for
+        :param guild_name: the name of the guild at the time of event creation
         :param user_snowflake: The user that is being disciplined
         :param user_username: The username at the time of discipline to list
         :param moderator_snowflake: the moderator user that is causing this discipline event to be created
+        :param moderator_username: the username of the moderator at the time of event creation
         :param discipline_type_id: the ID of the discipline type this event instance represents
         :param discipline_content: the content/data relevant to this discipline event if any
         :param discipline_reason: the reason for this discipline
@@ -78,9 +85,11 @@ class BotBackendClient:
             discipline_end_date = discipline_end_date.isoformat()
         post_data = {
             "discord_guild_snowflake": guild_snowflake,
+            "discord_guild_name": guild_name,
             "discord_user_snowflake": user_snowflake,
             "username_when_disciplined": user_username,
             "moderator_user_snowflake": moderator_snowflake,
+            "moderator_username": moderator_username,
             "reason_for_discipline": discipline_reason,
             "discipline_end_date_time": discipline_end_date,
             "discipline_type": discipline_type_id,
@@ -98,7 +107,7 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
 
-    async def discipline_event_get(self, discipline_event_id: int):
+    async def discipline_event_get(self, discipline_event_id: uuid.UUID):
         """
         Gets the discipline event dict for a particular database ID.
 

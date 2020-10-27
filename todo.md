@@ -1,0 +1,6 @@
+ - do precheck for if user is already banned etc
+ - implement additional listeners e.g. on mute removal, on unban, on role add
+ - ~~validate guild is consistent~~
+ - add reaction roles cog
+ - add help
+ - implement per-guild configuration

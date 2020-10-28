@@ -2,7 +2,7 @@
 from typing import Union, Tuple, Awaitable
 import asyncio
 from discord import Guild, User, Member, AuditLogAction, NotFound, Embed, Role
-from discord.ext.commands import Cog, Context, Bot, errors
+from discord.ext.commands import Cog, Context, Bot, CommandError
 from discord.ext import commands
 from datetime import timedelta
 from pytimeparse.timeparse import timeparse
@@ -23,18 +23,6 @@ class DisciplineCog(Cog, name='Discipline'):
         self._backend_client = backend_client
         self._audit_log_cache = []
         self._audit_log_last_seen = None
-
-    async def get_discipline_type_id(self, type_name: str) -> Tuple[Optional[int], Optional[str]]:
-        """
-        Pulls the database id of the discipline type matching the given name
-
-        :param type_name:
-        :return: A tuple of (int, None) with the type ID on success, (None, error) message on failure
-        """
-        ban_type, err = await self._backend_client.discipline_type_get_by_name(type_name)
-        if ban_type is None:
-            return None, err
-        return ban_type['id'], None
 
     async def _commit_user_discipline(self,
                                       guild: Guild,
@@ -61,9 +49,10 @@ class DisciplineCog(Cog, name='Discipline'):
         :return: None on success, an error message if failed
         """
         # extract the discipline database ID by name
-        discipline_type_id, err = await self.get_discipline_type_id(discipline_type_name)
-        if discipline_type_id is None:
+        discipline_type, err = await self._backend_client.discipline_type_get_by_name(discipline_type_name)
+        if discipline_type is None:
             return None, f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
+        discipline_type_id = discipline_type['id']
         # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
             guild.id,
@@ -365,7 +354,50 @@ class DisciplineCog(Cog, name='Discipline'):
             return None, err
         return discipline_event_list, None
 
-    @commands.Cog.listener()
+    async def cog_command_error(self, ctx: Context, error: CommandError):
+        """
+        TODO: replace this with a dictionary for performance?
+
+        :param ctx:
+        :param error:
+        :return:
+        """
+        sender_prefix = f'<@!{ctx.author.id}>'
+        if isinstance(error, commands.ConversionError):
+            await ctx.channel.send(f'{sender_prefix} Unable to convert argument: {error.original}')
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await ctx.channel.send(f'{sender_prefix} Argument {error.param.name} was not provided')
+        elif isinstance(error, commands.ArgumentParsingError):
+            await ctx.channel.send(f'{sender_prefix} Unable to parse arguments due to bad quoting.')
+        elif isinstance(error, commands.BadUnionArgument):
+            await ctx.channel.send(f'{sender_prefix} Argument {error.param.name} is improperly formatted')
+        elif isinstance(error, commands.CommandNotFound):
+            await ctx.channel.send(f'{sender_prefix} Command {ctx.command} is unknown.')
+        elif isinstance(error, commands.DisabledCommand):
+            await ctx.channel.send(f'{sender_prefix} Command {ctx.command} is disabled')
+        elif isinstance(error, commands.CommandInvokeError):
+            error_msg = f'{sender_prefix} Encountered an internal error while executing, please report to maintainer: '
+            error_msg += f'```{error.original}'
+            await ctx.channel.send(error_msg)
+        elif isinstance(error, commands.TooManyArguments):
+            await ctx.channel.send(f'{sender_prefix} Too many arguments provided for command {ctx.command}')
+        elif isinstance(error, commands.CommandOnCooldown):
+            return
+        elif isinstance(error, (commands.MemberNotFound, commands.UserNotFound)):
+            await ctx.channel.send(f'{sender_prefix} Member/User {error.argument} could not be found as provided')
+        elif isinstance(error, commands.ChannelNotFound):
+            await ctx.channel.send(f'{sender_prefix} Channel {error.argument} could not be found as provided.')
+        elif isinstance(error, commands.ChannelNotReadable):
+            msg = f'{sender_prefix} This bot does not have permission to read channel {error.argument}'
+            await ctx.channel.send(msg)
+        elif isinstance(error, commands.RoleNotFound):
+            await ctx.channel.send(f'{sender_prefix} The role {error.argument} could not be found as provided.')
+        elif isinstance(error, commands.EmojiNotFound):
+            await ctx.channel.send(f'{sender_prefix} The Emoji {error.argument} could not be found as provided')
+        else:
+            await ctx.channel.send(f'{sender_prefix} Encountered an unknown error: {error}')
+
+    @Cog.listener()
     async def on_member_ban(self, guild: Guild, user: Union[User, Member]):
         """
         handler for member ban events; checks if this was a bot ban, and if not (ban was made by a mod in the UI), then
@@ -410,7 +442,7 @@ class DisciplineCog(Cog, name='Discipline'):
                 ban_reason
             )
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_member_unban(self, guild: Guild, user: User) -> None:
         """
         TODO implement this
@@ -427,7 +459,7 @@ class DisciplineCog(Cog, name='Discipline'):
                 # TODO
                 pass
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_ready(self):
         print(f'ready: {self.bot.user.id}')
 

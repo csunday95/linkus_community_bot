@@ -3,7 +3,9 @@ from typing import List
 import argparse
 import json
 from discord.ext.commands import Bot
+from discord import Intents
 from discipline_cog import DisciplineCog
+from reaction_roles_cog import ReactionRolesCog
 import aiohttp
 import sys
 from bot_backend_client import BotBackendClient
@@ -20,7 +22,9 @@ class AIOSetupBot(Bot):
         async with aiohttp.ClientSession(headers=auth_header_dict) as client_session:  # type: aiohttp.ClientSession
             backend_client = BotBackendClient(client_session)
             discipline_cog = DisciplineCog(self, backend_client)
+            reaction_roles_cog = ReactionRolesCog(self, backend_client)
             self.add_cog(discipline_cog)
+            self.add_cog(reaction_roles_cog)
             await super().start(*args, **kwargs)
 
 
@@ -37,10 +41,14 @@ def main(args: List[str]):
         except (ValueError, TypeError) as e:
             print(f'Encountered error loading configuration file: {e}')
             return 1
+    bot_intents = Intents.default()
+    bot_intents.members = True
     bot = AIOSetupBot(
         backend_auth_token=config['backend_authorization_code'],
         command_prefix=config['bot_prefix'],
-        fetch_offline_members=True)
+        fetch_offline_members=True,
+        intents=bot_intents
+    )
     bot.run(config['discord_bot_token'])
     print('bot exiting')
     return 0

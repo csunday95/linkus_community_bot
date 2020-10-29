@@ -463,7 +463,12 @@ class DisciplineCog(Cog, name='Discipline'):
     async def on_ready(self):
         print(f'ready: {self.bot.user.id}')
 
-    @commands.command()
+    @commands.group()
+    async def mod(self, ctx: Context):
+        if ctx.subcommand_passed is None:
+            await ctx.channel.send('No moderation subcommand given.')
+
+    @mod.command()
     async def ban(self, ctx: Context, user: User, *reason: str) -> None:
         """
         Carry out an indefinite ban for the given user.
@@ -475,7 +480,7 @@ class DisciplineCog(Cog, name='Discipline'):
         # just treat as a permanent temp ban
         await self.tempban(ctx, user, None, *reason)
 
-    @commands.command()
+    @mod.command()
     async def tempban(self, ctx: Context, user: User, duration: Optional[str], *reason: str) -> None:
         """
         Temporarily ban the given user. The duration is specified as a string like "1h30m"
@@ -503,7 +508,7 @@ class DisciplineCog(Cog, name='Discipline'):
             discord_discipline_coroutine=ctx.guild.ban(user, reason=reason)
         )
 
-    @commands.command()
+    @mod.command()
     async def unban(self, ctx: Context, user: User, *reason: str):
         """
         Removes a ban from the given user with the supplied reason.
@@ -517,7 +522,7 @@ class DisciplineCog(Cog, name='Discipline'):
             ctx, user, BAN_DISCIPLINE_TYPE_NAME, ctx.guild.unban(user, reason=reason)
         )
 
-    @commands.command()
+    @mod.command()
     async def add_role(self, ctx: Context, member: Member, role: Role, *reason: str) -> None:
         """
         Adds the discord role with the matching name to the given user.
@@ -529,7 +534,7 @@ class DisciplineCog(Cog, name='Discipline'):
         """
         await self.temp_add_role(ctx, member, role, None, *reason)
 
-    @commands.command()
+    @mod.command()
     async def temp_add_role(self,
                             ctx: Context,
                             member: Member,
@@ -556,7 +561,7 @@ class DisciplineCog(Cog, name='Discipline'):
             discipline_content=str(role)
         )
 
-    @commands.command()
+    @mod.command()
     async def remove_role(self, ctx: Context, member: Member, role: Role, *reason: str) -> None:
         """
         Remove the role with the matching name from the given user.
@@ -574,7 +579,7 @@ class DisciplineCog(Cog, name='Discipline'):
             member.remove_roles(role, reason=reason)
         )
 
-    @commands.command()
+    @mod.command()
     async def mute(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Applies the configured mute role to the given user for the given reason indefinitely.
@@ -585,7 +590,7 @@ class DisciplineCog(Cog, name='Discipline'):
         """
         await self.tempmute(ctx, member, None, *reason)
 
-    @commands.command()
+    @mod.command()
     async def tempmute(self, ctx: Context, member: Member, duration: Optional[str], *reason: str) -> None:
         """
         Temporarily adds the configured mute role to the given user for the given reason.
@@ -598,7 +603,7 @@ class DisciplineCog(Cog, name='Discipline'):
         mute_role = ctx.guild.get_role(MUTE_DISCORD_ROLE_ID)
         await self.temp_add_role(ctx, member, mute_role, duration, *reason)
 
-    @commands.command()
+    @mod.command()
     async def unmute(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Removes the configured mute role from the given user.
@@ -610,7 +615,7 @@ class DisciplineCog(Cog, name='Discipline'):
         mute_role = ctx.guild.get_role(MUTE_DISCORD_ROLE_ID)
         await self.remove_role(ctx, member, mute_role, *reason)
 
-    @commands.command()
+    @mod.command()
     async def kick(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Kicks the given user from this discord guild. This is will be represented in the discipline database as a
@@ -630,7 +635,7 @@ class DisciplineCog(Cog, name='Discipline'):
             discord_discipline_coroutine=ctx.guild.kick(member, reason=reason)
         )
 
-    @commands.command()
+    @mod.command()
     async def status(self, ctx: Context, user: User) -> None:
         """
         Queries the status of the given user. Checks for and lists any active discipline events (excluding pardoned
@@ -688,7 +693,7 @@ class DisciplineCog(Cog, name='Discipline'):
         else:
             await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)
 
-    @commands.command()
+    @mod.command()
     async def history(self, ctx: Context, user: User, count: int = 10):
         """
         Retrieves up to count most recent discipline events for the given user. Count is 10 if not
@@ -715,7 +720,7 @@ class DisciplineCog(Cog, name='Discipline'):
                 embed=output_embed
             )
 
-    @commands.command()
+    @mod.command()
     async def event_details(self, ctx: Context, event_id: str) -> None:
         """
         Retrieves the details for a particular discipline event and responds to the requester with

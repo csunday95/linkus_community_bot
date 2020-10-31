@@ -354,49 +354,6 @@ class DisciplineCog(Cog, name='Discipline'):
             return None, err
         return discipline_event_list, None
 
-    async def cog_command_error(self, ctx: Context, error: CommandError):
-        """
-        TODO: replace this with a dictionary for performance?
-
-        :param ctx:
-        :param error:
-        :return:
-        """
-        sender_prefix = f'<@!{ctx.author.id}>'
-        if isinstance(error, commands.ConversionError):
-            await ctx.channel.send(f'{sender_prefix} Unable to convert argument: {error.original}')
-        elif isinstance(error, commands.MissingRequiredArgument):
-            await ctx.channel.send(f'{sender_prefix} Argument {error.param.name} was not provided')
-        elif isinstance(error, commands.ArgumentParsingError):
-            await ctx.channel.send(f'{sender_prefix} Unable to parse arguments due to bad quoting.')
-        elif isinstance(error, commands.BadUnionArgument):
-            await ctx.channel.send(f'{sender_prefix} Argument {error.param.name} is improperly formatted')
-        elif isinstance(error, commands.CommandNotFound):
-            await ctx.channel.send(f'{sender_prefix} Command {ctx.command} is unknown.')
-        elif isinstance(error, commands.DisabledCommand):
-            await ctx.channel.send(f'{sender_prefix} Command {ctx.command} is disabled')
-        elif isinstance(error, commands.CommandInvokeError):
-            error_msg = f'{sender_prefix} Encountered an internal error while executing, please report to maintainer: '
-            error_msg += f'```{error.original}'
-            await ctx.channel.send(error_msg)
-        elif isinstance(error, commands.TooManyArguments):
-            await ctx.channel.send(f'{sender_prefix} Too many arguments provided for command {ctx.command}')
-        elif isinstance(error, commands.CommandOnCooldown):
-            return
-        elif isinstance(error, (commands.MemberNotFound, commands.UserNotFound)):
-            await ctx.channel.send(f'{sender_prefix} Member/User {error.argument} could not be found as provided')
-        elif isinstance(error, commands.ChannelNotFound):
-            await ctx.channel.send(f'{sender_prefix} Channel {error.argument} could not be found as provided.')
-        elif isinstance(error, commands.ChannelNotReadable):
-            msg = f'{sender_prefix} This bot does not have permission to read channel {error.argument}'
-            await ctx.channel.send(msg)
-        elif isinstance(error, commands.RoleNotFound):
-            await ctx.channel.send(f'{sender_prefix} The role {error.argument} could not be found as provided.')
-        elif isinstance(error, commands.EmojiNotFound):
-            await ctx.channel.send(f'{sender_prefix} The Emoji {error.argument} could not be found as provided')
-        else:
-            await ctx.channel.send(f'{sender_prefix} Encountered an unknown error: {error}')
-
     @Cog.listener()
     async def on_member_ban(self, guild: Guild, user: Union[User, Member]):
         """

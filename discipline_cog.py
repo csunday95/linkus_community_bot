@@ -465,6 +465,11 @@ class DisciplineCog(Cog, name='Discipline'):
 
     @commands.group()
     async def mod(self, ctx: Context):
+        """
+        The group definition for all discipline commands
+
+        :param ctx:
+        """
         if ctx.subcommand_passed is None:
             await ctx.channel.send('No moderation subcommand given.')
 

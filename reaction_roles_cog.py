@@ -1,3 +1,5 @@
+
+import discord
 from discord.ext import commands
 from discord.ext.commands import Cog, Context, Bot
 from discord import RawReactionActionEvent, Guild, Member, PartialEmoji, TextChannel, Role, Emoji, Message, Embed
@@ -26,6 +28,9 @@ class ReactionRolesCog(Cog):
         if payload.guild_id is None:
             return  # non-guild case, shouldn't be possible
         member = payload.member  # type: Member
+        if member == self._bot.user:
+            # ignore reactions added by bot
+            return
         guild = self._bot.get_guild(payload.guild_id)  # type: Guild
         if guild is None:
             # TODO: handle error case
@@ -64,7 +69,7 @@ class ReactionRolesCog(Cog):
             description='Example Description'
         )
         message = await ctx.channel.send(content=None, embed=reaction_role_embed)  # type: Message
-        sub_content = f'<@!{ctx.author.id}> Reaction Role message created:\n`{message.id}`\n'
+        sub_content = f'{ctx.author.mention} Reaction Role message created:\n`{message.id}`\n'
         sub_content += f'{message.jump_url}'
         await message.edit(content=sub_content)
 
@@ -77,7 +82,7 @@ class ReactionRolesCog(Cog):
         :param message:
         """
         jump_link_embed = Embed(description=f'[jump]({message.jump_url})')
-        await ctx.channel.send(f'<@!{ctx.author.id}> Link to given post:', embed=jump_link_embed)
+        await ctx.channel.send(f'{ctx.author.mention} Link to given post:', embed=jump_link_embed)
 
     @react.command()
     async def last(self, ctx: Context):
@@ -99,7 +104,7 @@ class ReactionRolesCog(Cog):
         :param emoji:
         :param role:
         """
-        pass
+        await message.add_reaction(emoji)
 
     @react.command()
     async def post(self, ctx: Context, message: Message, channel: TextChannel):

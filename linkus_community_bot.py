@@ -52,7 +52,7 @@ class AIOSetupBot(Bot):
             await channel.send(f'{sender_prefix} Command {ctx.command} is disabled')
         elif isinstance(error, commands.CommandInvokeError):
             error_msg = f'{sender_prefix} Encountered an internal error while executing, please report to maintainer: '
-            error_msg += f'```{error.original}'
+            error_msg += f'```\n{error.original}\n```'
             await channel.send(error_msg)
         elif isinstance(error, commands.TooManyArguments):
             await channel.send(f'{sender_prefix} Too many arguments provided for command {ctx.command}')

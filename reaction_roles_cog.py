@@ -1,5 +1,4 @@
 
-import discord
 from discord.ext import commands
 from discord.ext.commands import Cog, Context, Bot
 from discord import RawReactionActionEvent, Guild, Member, PartialEmoji, TextChannel, Role, Emoji, Message, Embed
@@ -58,7 +57,7 @@ class ReactionRolesCog(Cog):
             await ctx.channel.send('No moderation subcommand given.')
 
     @react.command()
-    async def create(self, ctx: Context):
+    async def create(self, ctx: Context, *initial_mappings: str):
         """
         Creates a new reaction role embed entry and create message in management channel.
 
@@ -68,10 +67,56 @@ class ReactionRolesCog(Cog):
             title='Reaction Role Embed',
             description='Example Description'
         )
-        message = await ctx.channel.send(content=None, embed=reaction_role_embed)  # type: Message
+        # creating dictionary mapping emoji to roles from trailing arguments
+        initial_map_dict = {}
+        if len(initial_mappings) > 0:
+            # trailing arguments must have an even length
+            if len(initial_mappings) % 2 != 0:
+                await ctx.channel.send(f'{ctx.author.mention} Uneven number of initial mapping parameters given!')
+                return
+            emoji_converter = commands.PartialEmojiConverter()
+            role_converter = commands.RoleConverter()
+            for idx in range(0, len(initial_mappings), 2):
+                try:
+                    emoji_arg, role_arg = initial_mappings[idx:idx+2]
+                except IndexError:
+                    await ctx.channel.send(f'{ctx.author.mention} Uneven number of initial mapping parameters given!')
+                    return
+                try:
+                    emoji = await emoji_converter.convert(ctx, emoji_arg)
+                    role = await role_converter.convert(ctx, role_arg)
+                except commands.PartialEmojiConversionFailure:
+                    await ctx.channel.send(f'{ctx.author.mention} Unable to convert {emoji_arg} to an emoji.')
+                    return
+                except commands.RoleNotFound:
+                    await ctx.channel.send(f'{ctx.author.mention} Unable to convert {role_arg} to a role.')
+                    return
+                initial_map_dict[emoji.id] = role.id
+        message = await ctx.channel.send(content='Creating new reaction role message....')  # type: Message
+        created, err = await self._backend_client.reaction_role_embed_create(
+            message_snowflake=message.id,
+            guild_snowflake=ctx.guild.id,
+            creating_member_snowflake=ctx.author.id,
+            emoji_role_mapping=initial_map_dict
+        )
+        if created is None:
+            msg = f'{ctx.author.mention} Encountered an error creating mapping embed on backend: {err}'
+            await message.edit(content=msg)
+            return
         sub_content = f'{ctx.author.mention} Reaction Role message created:\n`{message.id}`\n'
         sub_content += f'{message.jump_url}'
-        await message.edit(content=sub_content)
+        await message.edit(content=sub_content, embed=reaction_role_embed)
+
+    @react.command()
+    async def delete(self, ctx: Context, message: Message):
+        """
+        Deletes the given reaction role message/embed.
+
+        :param ctx:
+        :param message:
+        :return:
+        """
+        await message.delete()
 
     @react.command()
     async def jump(self, ctx: Context, message: Message):

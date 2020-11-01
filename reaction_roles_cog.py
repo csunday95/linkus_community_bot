@@ -63,12 +63,8 @@ class ReactionRolesCog(Cog):
 
         :param ctx:
         """
-        reaction_role_embed = Embed(
-            title='Reaction Role Embed',
-            description='Example Description'
-        )
         # creating dictionary mapping emoji to roles from trailing arguments
-        initial_map_dict = {}
+        initial_map_dict = {}  # type: Dict[PartialEmoji, Role]
         if len(initial_mappings) > 0:
             # trailing arguments must have an even length
             if len(initial_mappings) % 2 != 0:
@@ -91,21 +87,32 @@ class ReactionRolesCog(Cog):
                 except commands.RoleNotFound:
                     await ctx.channel.send(f'{ctx.author.mention} Unable to convert {role_arg} to a role.')
                     return
-                initial_map_dict[emoji.id] = role.id
+                initial_map_dict[emoji] = role
         message = await ctx.channel.send(content='Creating new reaction role message....')  # type: Message
         created, err = await self._backend_client.reaction_role_embed_create(
             message_snowflake=message.id,
             guild_snowflake=ctx.guild.id,
             creating_member_snowflake=ctx.author.id,
-            emoji_role_mapping=initial_map_dict
+            emoji_role_mapping={emoji.id: role.id for emoji, role in initial_map_dict.items()}
         )
         if created is None:
             msg = f'{ctx.author.mention} Encountered an error creating mapping embed on backend: {err}'
             await message.edit(content=msg)
             return
-        sub_content = f'{ctx.author.mention} Reaction Role message created:\n`{message.id}`\n'
+        sub_content = f'{ctx.author.mention} Reaction Role message created:\nID=`{message.id}`\n'
         sub_content += f'{message.jump_url}'
+        generated_description = ['{} -> {}'.format(e, r.mention) for e, r in initial_map_dict.items()]
+        reaction_role_embed = Embed(
+            title='Reaction Role Embed',
+            description='\n'.join(generated_description)
+        )
         await message.edit(content=sub_content, embed=reaction_role_embed)
+        for emoji in initial_map_dict.keys():
+            await message.add_reaction(emoji)
+
+    @react.command()
+    async def edit(self, ctx: Context, message: Message):
+        await ctx.channel.send(f'{ctx.author.mention} Not Yet Implemented')
 
     @react.command()
     async def delete(self, ctx: Context, message: Message):
@@ -116,7 +123,7 @@ class ReactionRolesCog(Cog):
         :param message:
         :return:
         """
-        await message.delete()
+        await ctx.channel.send(f'{ctx.author.mention} Not Yet Implemented')
 
     @react.command()
     async def jump(self, ctx: Context, message: Message):
@@ -137,7 +144,7 @@ class ReactionRolesCog(Cog):
         :param ctx:
         :return:
         """
-        pass
+        await ctx.channel.send(f'{ctx.author.mention} Not Yet Implemented')
 
     @react.command()
     async def add(self, ctx: Context, message: Message, emoji: Emoji, role: Role):
@@ -161,4 +168,4 @@ class ReactionRolesCog(Cog):
         :param channel:
         :return:
         """
-        pass
+        await ctx.channel.send(f'{ctx.author.mention} Not Yet Implemented')

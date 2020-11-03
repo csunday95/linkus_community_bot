@@ -248,6 +248,28 @@ class BotBackendClient:
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
 
+    async def reaction_role_embed_get(self, message_snowflake: int, guild_snowflake: int):
+        """
+
+        :param message_snowflake:
+        :param guild_snowflake:
+        :return:
+        """
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/'
+        try:
+            async with self._session.get(req_url, params={'guild_snowflake': guild_snowflake}) as response:
+                if response.status != 200:
+                    return None, f'Encountered an HTTP error getting at {req_url}: {response.status}'
+                data = await response.json()
+                try:
+                    mappings = data['mappings']
+                except KeyError as e:
+                    return None, f'Encountered formatting error getting at {req_url}: {e}'
+                data['mappings'] = {m['emoji_snowflake']: m['role_snowflake'] for m in mappings}
+                return data, None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
     async def reaction_role_embed_list(self, guild_snowflake: int):
         """
         Gets the list of all reaction role embeds for the given guild.
@@ -293,7 +315,7 @@ class BotBackendClient:
         :return:
         """
         post_data = [{'emoji_snowflake': emoji, 'role_snowflake': role} for emoji, role in emoji_role_mappings.items()]
-        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/add_mappings'
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/add_mappings/'
         params = {'guild_snowflake': guild_snowflake}
         try:
             async with self._session.post(req_url, json=post_data, params=params) as response:

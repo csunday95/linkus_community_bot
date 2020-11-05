@@ -1,5 +1,5 @@
 
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 import aiohttp
 import uuid
 from datetime import datetime
@@ -294,7 +294,7 @@ class BotBackendClient:
         :param message_snowflake: the snowflake of the reaction role embed message to delete
         :return: None on success, an error message on failure
         """
-        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}'
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/'
         try:
             async with self._session.delete(req_url, params={'guild_snowflake': guild_snowflake}) as response:
                 if response.status != 200:
@@ -320,7 +320,28 @@ class BotBackendClient:
         try:
             async with self._session.post(req_url, json=post_data, params=params) as response:
                 if response.status != 201:
-                    return f'Encountered an HTTP error adding mapping at {req_url}: {response.status}'
+                    return f'Encountered an HTTP error adding mappings at {req_url}: {response.status}'
+                return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'
+
+    async def reaction_role_embed_remove_mappings(self,
+                                                  guild_snowflake: int,
+                                                  message_snowflake: int,
+                                                  emoji_ids: List[int]):
+        """
+
+        :param guild_snowflake:
+        :param message_snowflake:
+        :param emoji_ids:
+        :return:
+        """
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/remove_mappings/'
+        params = {'guild_snowflake': guild_snowflake}
+        try:
+            async with self._session.post(req_url, json=emoji_ids, params=params) as response:
+                if response.status != 200:
+                    return f'Encountered an HTTP error removing mappings at {req_url}: {response.status}'
                 return None
         except aiohttp.ClientConnectionError:
             return 'Unable to contact database'

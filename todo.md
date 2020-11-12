@@ -8,3 +8,4 @@
  - general error handling reports to some channel, logs or DM's certain user?
  - dyno bot style "whois"  https://discordapp.com/channels/754737239682187394/756740694088876132/773303640680824852
  - post to a logging channel when user joins/leaves/edits message/deletes message etc
+ - add message aliasing functionality

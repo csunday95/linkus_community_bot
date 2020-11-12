@@ -1,9 +1,9 @@
 
-from typing import Tuple
+from typing import Tuple, Optional
 from discord.ext import commands
 from discord.ext.commands import Cog, Context, Bot
 from discord import RawReactionActionEvent, Guild, Member, PartialEmoji, TextChannel, Role, Emoji, Message, Embed
-from bot_backend_client import *
+from bot_backend_client import BotBackendClient
 from asyncio import Lock
 
 

@@ -2,7 +2,7 @@
 from typing import Union, Tuple, Awaitable
 import asyncio
 from discord import Guild, User, Member, AuditLogAction, NotFound, Embed, Role
-from discord.ext.commands import Cog, Context, Bot, CommandError
+from discord.ext.commands import Cog, Context, Bot
 from discord.ext import commands
 from datetime import timedelta
 from pytimeparse.timeparse import timeparse
@@ -12,8 +12,6 @@ BAN_DISCIPLINE_TYPE_NAME = 'ban'
 ADD_ROLE_DISCIPLINE_TYPE_NAME = 'add_role'
 MUTE_DISCORD_ROLE_ID = 756739174488473721
 KICK_DISCIPLINE_TYPE_NAME = 'kick'
-
-# https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
 
 
 class DisciplineCog(Cog, name='Discipline'):

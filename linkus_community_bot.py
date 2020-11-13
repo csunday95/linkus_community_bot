@@ -11,6 +11,8 @@ import aiohttp
 import sys
 from bot_backend_client import BotBackendClient
 
+# https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
+
 
 class AIOSetupBot(Bot):
 

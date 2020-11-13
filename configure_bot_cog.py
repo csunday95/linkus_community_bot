@@ -1,4 +1,4 @@
-from discord.ext.commands import Cog, Context, Bot
+from discord.ext.commands import Cog, Bot
 from discord import Guild, Member
 from bot_backend_client import BotBackendClient
 

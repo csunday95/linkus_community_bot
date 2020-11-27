@@ -252,6 +252,7 @@ class ReactionRolesCog(Cog):
 # region Commands
 
     @commands.group()
+    @commands.guild_only()
     async def react(self, ctx: Context) -> None:
         """
         Defines the react command subgroup

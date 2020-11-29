@@ -561,7 +561,7 @@ class ReactionRolesCog(Cog):
         new_message = await to_channel.send(content=message.content, embed=message.embeds[0])
         emoji_role_mappings = embed_info['mappings']
         emoji_list = [self._bot.get_emoji(emoji_id) for emoji_id in emoji_role_mappings.keys()]
-        reaction_alias = embed_info['alias']
+        reaction_alias = embed_info['alias'] + '-posted'
         err = await self._create_on_backend(
             new_message, ctx.guild, reaction_alias, ctx.author, emoji_role_mappings
         )

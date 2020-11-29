@@ -17,7 +17,7 @@ KICK_DISCIPLINE_TYPE_NAME = 'kick'
 class DisciplineCog(Cog, name='Discipline'):
 
     def __init__(self, bot: Bot, backend_client: BotBackendClient):
-        self.bot = bot
+        self._bot = bot
         self._backend_client = backend_client
         self._audit_log_cache = []
         self._audit_log_last_seen = None
@@ -369,7 +369,7 @@ class DisciplineCog(Cog, name='Discipline'):
             if banned_user != user:
                 continue
             initiating_user = ban_entry.user  # type: Optional[User]
-            if initiating_user == self.bot.user.id:
+            if initiating_user == self._bot.user.id:
                 return  # this was a bot ban, don't need to do anything else
             ban_reason = ban_entry.reason
             break
@@ -386,7 +386,7 @@ class DisciplineCog(Cog, name='Discipline'):
             initiating_user_id = initiating_user.id
             initiating_username = str(initiating_user)
         # create database entry if this is not bot initiated
-        if initiating_user_id != self.bot.user.id:
+        if initiating_user_id != self._bot.user.id:
             # TODO: log if this creates an error
             await self._commit_user_discipline(
                 guild,
@@ -416,7 +416,7 @@ class DisciplineCog(Cog, name='Discipline'):
 
     @Cog.listener()
     async def on_ready(self):
-        print(f'ready: {self.bot.user.id}')
+        print(f'ready: {self._bot.user.id}')
 
     @commands.group()
     async def mod(self, ctx: Context):
@@ -705,6 +705,6 @@ class DisciplineCog(Cog, name='Discipline'):
         except (ValueError, TypeError):
             await ctx.channel.send(f'<@!{ctx.author.id}> Discipline event ID must be a valid UUID')
             return
-        disciplined_user = self.bot.get_user(disciplined_user_snowflake)
+        disciplined_user = self._bot.get_user(disciplined_user_snowflake)
         output_embed = self._generate_event_embed(ctx.guild, disciplined_user, event)
         await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)

@@ -7,6 +7,7 @@ from discord.ext import commands
 from discord import Intents
 from discipline_cog import DisciplineCog
 from reaction_roles_cog import ReactionRolesCog
+from configure_bot_cog import ConfigureBotCog
 import aiohttp
 import sys
 from bot_backend_client import BotBackendClient
@@ -26,8 +27,10 @@ class AIOSetupBot(Bot):
             backend_client = BotBackendClient(client_session)
             discipline_cog = DisciplineCog(self, backend_client)
             reaction_roles_cog = ReactionRolesCog(self, backend_client)
+            configure_cog = ConfigureBotCog(self, backend_client)
             self.add_cog(discipline_cog)
             self.add_cog(reaction_roles_cog)
+            self.add_cog(configure_cog)
             await super().start(*args, **kwargs)
 
     async def on_command_error(self, ctx: Context, error: CommandError):

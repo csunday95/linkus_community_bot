@@ -1,8 +1,62 @@
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 import aiohttp
 import uuid
 from datetime import datetime
+
+
+class DisciplineConfiguration:
+    def __init__(self, moderation_channel_snowflake: int, moderation_role_snowflake: int,
+                 moderation_channel_only: bool):
+        """
+        Struct class for holding configuration parameters specific to discipline cog
+
+        :param moderation_channel_snowflake:
+        :param moderation_role_snowflake:
+        :param moderation_channel_only:
+        """
+        self.moderation_channel_snowflake = moderation_channel_snowflake
+        self.moderation_role_snowflake = moderation_role_snowflake
+        self.moderation_channel_only = moderation_channel_only
+
+    def as_dict(self) -> dict:
+        return {
+            'moderation_channel_snowflake': self.moderation_channel_snowflake,
+            'moderation_role_snowflake': self.moderation_role_snowflake,
+            'moderation_channel_only': self.moderation_channel_only
+        }
+
+
+class ReactionConfiguration:
+    def __init__(self,
+                 default_description_line: str,
+                 allow_unmapped_reactions: bool,
+                 allow_multiple_emotes_per_role: bool,
+                 allow_multiple_roles_per_emote: bool,
+                 remove_roles_on_react_remove: bool):
+        """
+        struct class for holding configuration parameters specific to the reaction roles cog
+
+        :param default_description_line:
+        :param allow_unmapped_reactions:
+        :param allow_multiple_emotes_per_role:
+        :param allow_multiple_roles_per_emote:
+        :param remove_roles_on_react_remove:
+        """
+        self.default_description_line = default_description_line
+        self.allow_unmapped_reactions = allow_unmapped_reactions
+        self.allow_multiple_emotes_per_role = allow_multiple_emotes_per_role
+        self.allow_multiple_roles_per_emote = allow_multiple_roles_per_emote
+        self.remove_roles_on_react_remove = remove_roles_on_react_remove
+
+    def as_dict(self) -> dict:
+        return {
+            'default_description_line': self.default_description_line,
+            'allow_unmapped_reactions': self.allow_unmapped_reactions,
+            'allow_multiple_emotes_per_role': self.allow_multiple_emotes_per_role,
+            'allow_multiple_roles_per_emote': self.allow_multiple_roles_per_emote,
+            'remove_roles_on_react_remove': self.remove_roles_on_react_remove
+        }
 
 
 class BotBackendClient:
@@ -349,3 +403,34 @@ class BotBackendClient:
                 return None
         except aiohttp.ClientConnectionError:
             return 'Unable to contact database'
+
+    async def configuration_create_guild_configuration(self,
+                                                       guild_snowflake: int,
+                                                       logging_channel_snowflake: int,
+                                                       discipline_configuration: DisciplineConfiguration,
+                                                       reaction_configuration: ReactionConfiguration) \
+            -> Tuple[Optional[dict], Optional[str]]:
+        """
+        Creates a backend instance of guild configuration with the given parameter values.
+
+        :param guild_snowflake:
+        :param logging_channel_snowflake:
+        :param discipline_configuration:
+        :param reaction_configuration:
+        :return: None on success, error message on failure
+        """
+        guild_config_req_url = self._api_url + 'configuration/bot-configuration/'
+        guild_config_post_data = {
+            'guild_snowflake': guild_snowflake,
+            'logging_channel_snowflake': logging_channel_snowflake,
+            'discipline_configuration': discipline_configuration.as_dict(),
+            'reaction_configuration': reaction_configuration.as_dict()
+        }
+        try:
+            async with self._session.post(guild_config_req_url, json=guild_config_post_data) as response:
+                if response.status != 201:
+                    fmt = 'Encountered an HTTP error creating guild configuration as {url}: {status}'
+                    return None, fmt.format(url=guild_config_req_url, status=response.status)
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'

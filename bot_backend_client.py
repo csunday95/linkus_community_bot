@@ -413,11 +413,13 @@ class BotBackendClient:
         """
         Creates a backend instance of guild configuration with the given parameter values.
 
-        :param guild_snowflake:
-        :param logging_channel_snowflake:
-        :param discipline_configuration:
-        :param reaction_configuration:
-        :return: None on success, error message on failure
+        :param guild_snowflake: the guild to create configuration for
+        :param logging_channel_snowflake: the snowflake of the channel to log bot error messages to
+        :param discipline_configuration: a DisciplineConfiguration object specifying the discipline sub-module
+        configuration
+        :param reaction_configuration: a ReactionConfiguration object specifying the reaction sub-module
+        configuration
+        :return: Tuple of (Created Configuration, None) on success, (None, error message) on failure
         """
         guild_config_req_url = self._api_url + 'configuration/bot-configuration/'
         guild_config_post_data = {
@@ -431,6 +433,23 @@ class BotBackendClient:
                 if response.status != 201:
                     fmt = 'Encountered an HTTP error creating guild configuration as {url}: {status}'
                     return None, fmt.format(url=guild_config_req_url, status=response.status)
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
+    async def configuration_get_guild_configuration(self, guild_snowflake: int) -> Tuple[Optional[dict], Optional[str]]:
+        """
+        Retrieves the current bot configuration for the given guild.
+
+        :param guild_snowflake: the guild to get the configuration for
+        :return: a tuple of (configuration, None) on success, (None, error message) otherwise
+        """
+        get_config_req_url = self._api_url + f'configuration/bot-configuration/{guild_snowflake}/'
+        try:
+            async with self._session.get(get_config_req_url) as response:
+                if response.status != 200:
+                    fmt = 'Encountered an HTTP error creating guild configuration as {url}: {status}'
+                    return None, fmt.format(url=get_config_req_url, status=response.status)
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'

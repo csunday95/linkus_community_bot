@@ -1,10 +1,35 @@
 
 from typing import Tuple, Optional, Dict
 from discord.ext import commands
-from discord.ext.commands import Cog, Context, Bot
+from discord.ext.commands import Cog, Context, Bot, Converter, MessageConverter
 from discord import RawReactionActionEvent, Guild, Member, PartialEmoji, TextChannel, Role, Emoji, Message, Embed
 from bot_backend_client import BotBackendClient
 from asyncio import Lock
+
+# has to be global for use in type annotation
+# class is intended to be singleton anyway (maybe enforce later)
+_alias_mapping_cache = {}
+
+
+class ReactionEmbedConverter(MessageConverter):
+    def __init__(self, alias_map: Dict[int, Dict[str, int]]): 
+        self._alias_map = alias_map
+
+    async def convert(self, ctx: Context, argument: str):
+        # first try alias
+        guild = ctx.guild
+        try:
+            guild_alias_map = self._alias_map[guild.id]
+        except KeyError:
+            raise commands.BadArgument(f'Guild {guild} is not currently known')
+        if argument in guild_alias_map:
+            message_id = guild_alias_map[argument]
+        else:
+            message_id = argument
+        # convert requires string form
+        return await super().convert(ctx, str(message_id))
+
+_reaction_converter = ReactionEmbedConverter(_alias_mapping_cache)
 
 
 class ReactionRolesCog(Cog):
@@ -55,6 +80,7 @@ class ReactionRolesCog(Cog):
         if reaction_embed_list is None:
             return f'Unable to retrieve reaction role embed list: {err}'
         async with self._mapping_cache_lock:
+            _alias_mapping_cache[guild.id] = {e['alias']: e['message_snowflake'] for e in reaction_embed_list}
             if guild.id not in self._reaction_mapping_cache:
                 self._reaction_mapping_cache[guild.id] = {}
             for reaction_entry in reaction_embed_list:
@@ -146,7 +172,7 @@ class ReactionRolesCog(Cog):
                 return None, None
         return guild, member
 
-    async def _create_on_backend(self, message: Message, guild: Guild, author: Member, id_mapping: Dict[int, int]):
+    async def _create_on_backend(self, message: Message, guild: Guild, alias: str, author: Member, id_mapping: Dict[int, int]):
         """
         Create a corresponding backend entry for the reaction role embed.
 
@@ -159,6 +185,7 @@ class ReactionRolesCog(Cog):
         created, err = await self._backend_client.reaction_role_embed_create(
             message_snowflake=message.id,
             guild_snowflake=guild.id,
+            alias=alias,
             creating_member_snowflake=author.id,
             emoji_role_mapping=id_mapping
         )
@@ -169,6 +196,9 @@ class ReactionRolesCog(Cog):
         async with self._mapping_cache_lock:
             if guild_id not in self._reaction_mapping_cache:
                 self._reaction_mapping_cache[guild_id] = {}
+            if guild_id not in _alias_mapping_cache:
+                _alias_mapping_cache[guild_id] = {}
+            _alias_mapping_cache[guild_id][alias] = message.id
             self._reaction_mapping_cache[guild_id][message.id] = id_mapping.copy()
         return None
 
@@ -252,6 +282,7 @@ class ReactionRolesCog(Cog):
 # region Commands
 
     @commands.group()
+    @commands.guild_only()
     async def react(self, ctx: Context) -> None:
         """
         Defines the react command subgroup
@@ -262,11 +293,12 @@ class ReactionRolesCog(Cog):
             await ctx.channel.send('No moderation subcommand given.')
 
     @react.command()
-    async def create(self, ctx: Context, *initial_mappings: str):
+    async def create(self, ctx: Context, alias: str, *initial_mappings: str):
         """
         Creates a new reaction role embed entry and create message in management channel.
 
         :param ctx: The command execution context
+        :param alias: The human readable name for this reaction role embed
         :param initial_mappings: a list of initial mappings to create the embed with; must be an even length list
         with an emote followed by a role e.g. ["emote", "role", "emote", "role", ...]
         """
@@ -298,12 +330,13 @@ class ReactionRolesCog(Cog):
                 initial_map_dict[emoji] = role
                 initial_id_map_dict = {emoji.id: role.id for emoji, role in initial_map_dict.items()}
         message = await ctx.channel.send(content='Creating new reaction role message....')  # type: Message
-        err = await self._create_on_backend(message, ctx.guild, ctx.author, initial_id_map_dict)
+        err = await self._create_on_backend(message, ctx.guild, alias, ctx.author, initial_id_map_dict)
         if err is not None:
             msg = f'{ctx.author.mention} Encountered an error creating mapping embed on backend: {err}'
             await message.edit(content=msg)
             return
         sub_content = f'{ctx.author.mention} Reaction Role message created:\nID=`{ctx.channel.id}-{message.id}`\n'
+        sub_content += f'alias=`{alias}`\n'
         sub_content += f'{message.jump_url}'
         generated_description = ['{} -> {}'.format(e, r.mention) for e, r in initial_map_dict.items()]
         reaction_role_embed = Embed(
@@ -325,7 +358,7 @@ class ReactionRolesCog(Cog):
             await ctx.channel.send('No reaction role edit subcommand given.')
 
     @edit_group.command(name='title')
-    async def edit_title(self, ctx: Context, message: Message, *, new_title: str) -> None:
+    async def edit_title(self, ctx: Context, message: _reaction_converter, *, new_title: str) -> None:
         """
         Command to edit the title of an existing reaction role embed, replacing the title with the given new title.
 
@@ -342,7 +375,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(f'{ctx.author.mention} Title has been edited.')
 
     @edit_group.command(name='message')
-    async def edit_message_content(self, ctx: Context, message: Message, *, new_content: str) -> None:
+    async def edit_message_content(self, ctx: Context, message: _reaction_converter, *, new_content: str) -> None:
         """
         Command to edit the message content of the reaction role embed message. Replaces the old content with the
         given new content (can be empty)
@@ -358,7 +391,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(f'{ctx.author.mention} Message content has been edited.')
 
     @edit_group.command(name='description')
-    async def edit_embed_description(self, ctx: Context, message: Message, *, new_description: str) -> None:
+    async def edit_embed_description(self, ctx: Context, message: _reaction_converter, *, new_description: str) -> None:
         """
         Command to edit the description field of the reaction role embed. Replaces the prior description with the
         given new one.
@@ -376,7 +409,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(f'{ctx.author.mention} Reaction embed description has been edited.')
 
     @edit_group.command(name='append_description')
-    async def append_embed_description(self, ctx: Context, message: Message, *, to_append: str) -> None:
+    async def append_embed_description(self, ctx: Context, message: _reaction_converter, *, to_append: str) -> None:
         """
         Command to append content to the description of a reaction role embed message.
 
@@ -393,7 +426,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(f'{ctx.author.mention} Reaction embed description has been appended to.')
 
     @react.command()
-    async def delete(self, ctx: Context, message: Message) -> None:
+    async def delete(self, ctx: Context, message: _reaction_converter) -> None:
         """
         Deletes the given reaction role message/embed.
 
@@ -416,7 +449,7 @@ class ReactionRolesCog(Cog):
             print(f'Encountered an error clearing cache on react embed delete: {e}')
 
     @react.command()
-    async def jump(self, ctx: Context, message: Message):
+    async def jump(self, ctx: Context, message: _reaction_converter):
         """
         Messages the context channel with the reaction role embed jump link.
 
@@ -436,7 +469,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(f'{ctx.author.mention} Not Yet Implemented')
 
     @react.command()
-    async def add(self, ctx: Context, message: Message, emoji: Emoji, role: Role, *description: str):
+    async def add(self, ctx: Context, message: _reaction_converter, emoji: Emoji, role: Role, *description: str):
         """
         Adds a mapping of the given emoji to the given role for the given message.
 
@@ -453,7 +486,7 @@ class ReactionRolesCog(Cog):
         else:
             # TODO: add configurable default description format
             description = '{emoji} -> {role}'
-        description = description.format(emoji=emoji, role=role.mention)
+            description = description.format(emoji=emoji, role=role.mention)
         try:
             mapping_dict = self._reaction_mapping_cache[ctx.guild.id][message.id]
         except KeyError:
@@ -470,11 +503,13 @@ class ReactionRolesCog(Cog):
         mapping_dict[emoji.id] = role.id
         await message.add_reaction(emoji)
         embed = message.embeds[0]
-        embed.description += f'\n{description}'
+        current_description = '' if embed.description == Embed.Empty else embed.description
+        embed.description = current_description + f'\n{description}'
+        await message.edit(embed=embed)
         await ctx.channel.send(f'{ctx.author.mention} Reaction role mapping of {emoji} to {role} added')
 
     @react.command()
-    async def remove(self, ctx: Context, message: Message, emoji: Emoji):
+    async def remove(self, ctx: Context, message: _reaction_converter, emoji: Emoji):
         """
         Remove the given emoji from having a mapping.
 
@@ -508,7 +543,7 @@ class ReactionRolesCog(Cog):
         await ctx.channel.send(msg)
 
     @react.command()
-    async def post(self, ctx: Context, message: Message, to_channel: TextChannel):
+    async def post(self, ctx: Context, message: _reaction_converter, to_channel: TextChannel):
         """
         Posts a copy of the reaction role embed to the given channel and register it as a new reaction role
         embed.
@@ -526,8 +561,9 @@ class ReactionRolesCog(Cog):
         new_message = await to_channel.send(content=message.content, embed=message.embeds[0])
         emoji_role_mappings = embed_info['mappings']
         emoji_list = [self._bot.get_emoji(emoji_id) for emoji_id in emoji_role_mappings.keys()]
+        reaction_alias = embed_info['alias']
         err = await self._create_on_backend(
-            new_message, ctx.guild, ctx.author, emoji_role_mappings
+            new_message, ctx.guild, reaction_alias, ctx.author, emoji_role_mappings
         )
         if err is not None:
             await ctx.channel.send(f'{ctx.author.mention} Unable to create new reaction role embed: {err}')
@@ -535,6 +571,7 @@ class ReactionRolesCog(Cog):
             return
         for emoji in emoji_list:
             await new_message.add_reaction(emoji)
-        msg = f'{ctx.author.mention} New message created with ID=`{ctx.channel.id}-{new_message.id}`'
+        msg = f'{ctx.author.mention} New message created with \nID=`{ctx.channel.id}-{new_message.id}`\n'
+        msg += f'alias=`{reaction_alias}`'
         await ctx.channel.send(msg)
 # endregion

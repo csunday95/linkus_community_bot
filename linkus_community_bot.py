@@ -53,6 +53,7 @@ class AIOSetupBot(Bot):
         elif isinstance(error, commands.DisabledCommand):
             await channel.send(f'{sender_prefix} Command `{ctx.command}` is disabled')
         elif isinstance(error, commands.CommandInvokeError):
+            print(error)
             error_msg = f'{sender_prefix} Encountered an internal error while executing, please report to maintainer: '
             error_msg += f'```\n{error.original}\n```'
             await channel.send(error_msg)

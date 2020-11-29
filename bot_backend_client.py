@@ -219,6 +219,7 @@ class BotBackendClient:
     async def reaction_role_embed_create(self,
                                          message_snowflake: int,
                                          guild_snowflake: int,
+                                         alias: str,
                                          creating_member_snowflake: int,
                                          emoji_role_mapping: Dict[int, int]):
         """
@@ -236,6 +237,7 @@ class BotBackendClient:
         creation_data = {
             'message_snowflake': message_snowflake,
             'guild_snowflake': guild_snowflake,
+            'alias': alias,
             'creating_member_snowflake': creating_member_snowflake,
             'mappings': emoji_role_mapping_list
         }
@@ -243,7 +245,9 @@ class BotBackendClient:
         try:
             async with self._session.post(req_url, json=creation_data) as response:
                 if response.status != 201:
-                    return None, f'Encountered an HTTP error creating at {req_url}: {response.status}'
+                    error_content = str(await response.content.read())
+                    msg = f'Encountered an HTTP error creating at {req_url}: {response.status}: {error_content}'
+                    return None, msg
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
@@ -297,7 +301,7 @@ class BotBackendClient:
         req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/'
         try:
             async with self._session.delete(req_url, params={'guild_snowflake': guild_snowflake}) as response:
-                if response.status != 200:
+                if response.status != 204:
                     return f'Encountered an HTTP error deleting at {req_url}: {response.status}'
             return None
         except aiohttp.ClientConnectionError:

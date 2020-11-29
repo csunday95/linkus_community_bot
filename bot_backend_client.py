@@ -1,5 +1,5 @@
 
-from typing import Optional
+from typing import Optional, Dict, List
 import aiohttp
 import uuid
 from datetime import datetime
@@ -29,7 +29,7 @@ class BotBackendClient:
         on failure.
         """
         try:
-            async with self._session.get(self._api_url + 'discipline-type') as response:
+            async with self._session.get(self._api_url + 'discipline/discipline-type') as response:
                 if response.status != 200:
                     return None, f'Got error code from server: {response.status}'
                 return await response.json(), None
@@ -44,8 +44,9 @@ class BotBackendClient:
         :return: A tuple of ({"discipline_name": str}, None) on success or (None, error message) on failure.
         """
         params = {'name': type_name}
+        endpoint_url = self._api_url + 'discipline/discipline-type/get_by_name'
         try:
-            async with self._session.get(self._api_url + 'discipline-type/get_by_name', params=params) as response:
+            async with self._session.get(endpoint_url, params=params) as response:
                 if response.status != 200:
                     return None, f'Got error code from server: {response.status}'
                 return await response.json(), None
@@ -97,12 +98,12 @@ class BotBackendClient:
         }
         if immediately_terminated:
             post_data['is_terminated'] = True
-        req_url = self._api_url + 'discipline-event/'
+        req_url = self._api_url + 'discipline/discipline-event/'
         try:
             async with self._session.post(req_url, json=post_data) as response:
                 if response.status != 201:
                     print(await response.content.read())
-                    return None, f'Encountered an HTTP error retrieving {req_url}: {response.status}'
+                    return None, f'Encountered an HTTP error creating at {req_url}: {response.status}'
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
@@ -114,7 +115,7 @@ class BotBackendClient:
         :param discipline_event_id: the database id of the discipline event to retrieve
         :return: A tuple of (Discipline Event Dict, None) on success, (None, error message) on failure
         """
-        req_url = self._api_url + f'discipline-event/{discipline_event_id}/'
+        req_url = self._api_url + f'discipline/discipline-event/{discipline_event_id}/'
         try:
             async with self._session.get(req_url) as response:
                 if response.status != 200:
@@ -132,7 +133,7 @@ class BotBackendClient:
         :return: A tuple of (list of discipline event dicts, None) on success, or (None, error message) on failure
         """
         params = {'guild_snowflake': guild_snowflake, 'user_snowflake': user_snowflake}
-        req_url = self._api_url + 'discipline-event/get_discipline_events_for'
+        req_url = self._api_url + 'discipline/discipline-event/get_discipline_events_for'
         results = []
         while req_url is not None:
             try:
@@ -165,7 +166,7 @@ class BotBackendClient:
         params = {
             'guild_snowflake': guild_snowflake, 'user_snowflake': user_snowflake, 'discipline_name': discipline_name
         }
-        req_url = self._api_url + 'discipline-event/get_latest_discipline'
+        req_url = self._api_url + 'discipline/discipline-event/get_latest_discipline'
         try:
             async with self._session.get(req_url, params=params) as response:
                 if response.status == 404:
@@ -184,7 +185,7 @@ class BotBackendClient:
         :param is_pardoned: The new state to set the is_pardoned value to for the given event.
         :return: None on sucess, error message on failure
         """
-        req_url = self._api_url + f'discipline-event/{event_id}/'
+        req_url = self._api_url + f'discipline/discipline-event/{event_id}/'
         patch_data = {'is_pardoned': is_pardoned}
         try:
             async with self._session.patch(req_url, data=patch_data) as response:
@@ -203,7 +204,7 @@ class BotBackendClient:
         :param username: the username to search for a match of
         :return: A tuple of (discipline event dict, None) on success, (None, error message) on failure.
         """
-        req_url = self._api_url + 'discipline-event/get_latest_discipline_by_username'
+        req_url = self._api_url + 'discipline/discipline-event/get_latest_discipline_by_username'
         params = {'guild_snowflake': guild_snowflake, 'username': username}
         try:
             async with self._session.get(req_url, params=params) as response:
@@ -214,3 +215,137 @@ class BotBackendClient:
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
+
+    async def reaction_role_embed_create(self,
+                                         message_snowflake: int,
+                                         guild_snowflake: int,
+                                         alias: str,
+                                         creating_member_snowflake: int,
+                                         emoji_role_mapping: Dict[int, int]):
+        """
+        NOTE: mapping is emoji -> role
+
+        :param message_snowflake:
+        :param guild_snowflake: the guild in which this reaction role embed exists
+        :param creating_member_snowflake:
+        :param emoji_role_mapping:
+        :return:
+        """
+        emoji_role_mapping_list = [
+            {'emoji_snowflake': emoji, 'role_snowflake': role} for emoji, role in emoji_role_mapping.items()
+        ]
+        creation_data = {
+            'message_snowflake': message_snowflake,
+            'guild_snowflake': guild_snowflake,
+            'alias': alias,
+            'creating_member_snowflake': creating_member_snowflake,
+            'mappings': emoji_role_mapping_list
+        }
+        req_url = self._api_url + 'reaction/tracked-reaction-embed/'
+        try:
+            async with self._session.post(req_url, json=creation_data) as response:
+                if response.status != 201:
+                    error_content = str(await response.content.read())
+                    msg = f'Encountered an HTTP error creating at {req_url}: {response.status}: {error_content}'
+                    return None, msg
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
+    async def reaction_role_embed_get(self, message_snowflake: int, guild_snowflake: int):
+        """
+
+        :param message_snowflake:
+        :param guild_snowflake:
+        :return:
+        """
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/'
+        try:
+            async with self._session.get(req_url, params={'guild_snowflake': guild_snowflake}) as response:
+                if response.status != 200:
+                    return None, f'Encountered an HTTP error getting at {req_url}: {response.status}'
+                data = await response.json()
+                try:
+                    mappings = data['mappings']
+                except KeyError as e:
+                    return None, f'Encountered formatting error getting at {req_url}: {e}'
+                data['mappings'] = {m['emoji_snowflake']: m['role_snowflake'] for m in mappings}
+                return data, None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
+    async def reaction_role_embed_list(self, guild_snowflake: int):
+        """
+        Gets the list of all reaction role embeds for the given guild.
+
+        :param guild_snowflake: the guild for which all reaction role embeds should be retrieved
+        :return: a tuple of (reaction embed list, None) on success, (None, error message) on failure.
+        """
+        req_url = self._api_url + 'reaction/tracked-reaction-embed/'
+        try:
+            async with self._session.get(req_url, params={'guild_snowflake': guild_snowflake}) as response:
+                if response.status != 200:
+                    return None, f'Encountered an HTTP error getting list at {req_url}: {response.status}'
+                return await response.json(), None
+        except aiohttp.ClientConnectionError:
+            return None, 'Unable to contact database'
+
+    async def reaction_role_embed_delete(self, guild_snowflake: int, message_snowflake: int) -> Optional[str]:
+        """
+        Attempts to delete the given reaction role embed.
+
+        :param guild_snowflake: the guild under which the reaction role embed to delete exists
+        :param message_snowflake: the snowflake of the reaction role embed message to delete
+        :return: None on success, an error message on failure
+        """
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/'
+        try:
+            async with self._session.delete(req_url, params={'guild_snowflake': guild_snowflake}) as response:
+                if response.status != 204:
+                    return f'Encountered an HTTP error deleting at {req_url}: {response.status}'
+            return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'
+
+    async def reaction_role_embed_add_mappings(self,
+                                               guild_snowflake: int,
+                                               message_snowflake: int,
+                                               emoji_role_mappings: Dict[int, int]):
+        """
+
+        :param guild_snowflake:
+        :param message_snowflake:
+        :param emoji_role_mappings:
+        :return:
+        """
+        post_data = [{'emoji_snowflake': emoji, 'role_snowflake': role} for emoji, role in emoji_role_mappings.items()]
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/add_mappings/'
+        params = {'guild_snowflake': guild_snowflake}
+        try:
+            async with self._session.post(req_url, json=post_data, params=params) as response:
+                if response.status != 201:
+                    return f'Encountered an HTTP error adding mappings at {req_url}: {response.status}'
+                return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'
+
+    async def reaction_role_embed_remove_mappings(self,
+                                                  guild_snowflake: int,
+                                                  message_snowflake: int,
+                                                  emoji_ids: List[int]):
+        """
+
+        :param guild_snowflake:
+        :param message_snowflake:
+        :param emoji_ids:
+        :return:
+        """
+        req_url = self._api_url + f'reaction/tracked-reaction-embed/{message_snowflake}/remove_mappings/'
+        params = {'guild_snowflake': guild_snowflake}
+        try:
+            async with self._session.post(req_url, json=emoji_ids, params=params) as response:
+                if response.status != 200:
+                    return f'Encountered an HTTP error removing mappings at {req_url}: {response.status}'
+                return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'

@@ -10,10 +10,8 @@ from bot_backend_client import *
 
 BAN_DISCIPLINE_TYPE_NAME = 'ban'
 ADD_ROLE_DISCIPLINE_TYPE_NAME = 'add_role'
-MUTE_DISCORD_ROLE_NAME = 'muted'
+MUTE_DISCORD_ROLE_ID = 756739174488473721
 KICK_DISCIPLINE_TYPE_NAME = 'kick'
-
-# https://discord.com/api/oauth2/authorize?client_id=754719676541698150&scope=bot&permissions=268921926
 
 
 class DisciplineCog(Cog, name='Discipline'):
@@ -23,18 +21,6 @@ class DisciplineCog(Cog, name='Discipline'):
         self._backend_client = backend_client
         self._audit_log_cache = []
         self._audit_log_last_seen = None
-
-    async def get_discipline_type_id(self, type_name: str) -> Tuple[Optional[int], Optional[str]]:
-        """
-        Pulls the database id of the discipline type matching the given name
-
-        :param type_name:
-        :return: A tuple of (int, None) with the type ID on success, (None, error) message on failure
-        """
-        ban_type, err = await self._backend_client.discipline_type_get_by_name(type_name)
-        if ban_type is None:
-            return None, err
-        return ban_type['id'], None
 
     async def _commit_user_discipline(self,
                                       guild: Guild,
@@ -61,9 +47,10 @@ class DisciplineCog(Cog, name='Discipline'):
         :return: None on success, an error message if failed
         """
         # extract the discipline database ID by name
-        discipline_type_id, err = await self.get_discipline_type_id(discipline_type_name)
-        if discipline_type_id is None:
+        discipline_type, err = await self._backend_client.discipline_type_get_by_name(discipline_type_name)
+        if discipline_type is None:
             return None, f'unable to retrieve type ID for discipline type {discipline_type_name}: {err}'
+        discipline_type_id = discipline_type['id']
         # create database entry via API endpoint
         return await self._backend_client.discipline_event_create(
             guild.id,
@@ -94,50 +81,6 @@ class DisciplineCog(Cog, name='Discipline'):
             reason = ' '.join(reason_list)
         return reason
 
-    async def _resolve_user(self, candidate_guild: Guild, user_identifier: str, database_fallback: bool = False) -> \
-            Tuple[Optional[User], Optional[str]]:
-        """
-        Attempts to resolve the given user identifier string to a user or member object within the given Guild.
-
-        If an integer value is given, this function will assume the identifier is
-
-        :param candidate_guild:
-        :param user_identifier:
-        :param database_fallback:
-        :return:
-        """
-        # first, try getting by username
-        try:
-            user_obj = candidate_guild.get_member_named(user_identifier)
-        except NotFound:
-            user_obj = None
-        # if username not a member, try getting as a snowflake
-        if user_obj is None:
-            try:
-                user_snowflake = int(user_identifier)
-                user_obj = candidate_guild.get_member(user_snowflake)
-                if user_obj is None:
-                    # fall back to getting user generally
-                    user_obj = self.bot.get_user(user_snowflake)
-            except ValueError:
-                pass
-        # if we were unable to resolve a user/member from given identifer
-        if user_obj is None:
-            # if database_fallback was specified, see if user has been disciplined, and has a discipline event entry
-            if database_fallback:
-                latest_event, err = await self._backend_client.discipline_event_get_latest_by_username(
-                    guild_snowflake=candidate_guild.id, username=user_identifier
-                )
-                # if an event exists for the username, extract the snowflake from that
-                if latest_event is not None:
-                    try:
-                        return await self.bot.fetch_user(latest_event['discord_user_snowflake']), None
-                    except NotFound:
-                        pass
-            error_message = f'User {user_identifier} does not exist or is not currently a Member!'
-            return None, error_message
-        return user_obj, None
-
     @staticmethod
     async def _resolve_member(candidate_guild: Guild, user_identifier: str) -> Tuple[Optional[Member], Optional[str]]:
         """
@@ -160,33 +103,6 @@ class DisciplineCog(Cog, name='Discipline'):
         if user_obj is None:
             return None, f'User {user_identifier} is not currently a Member!'
         return user_obj, None
-
-    @staticmethod
-    async def _resolve_role(target_guild: Guild, role_name: str) -> Tuple[Optional[Role], Optional[str]]:
-        """
-        Attempts to resolve a Role object from the given guild that matches the provided name. Matching is
-        case insensitive, but must be exact.
-
-        :param target_guild: The guild to find the role within
-        :param role_name: the name of the role to search for
-        :return: a tuple of (Role, warning message or None) on success, or (None, error message) on failure.
-        """
-        guild_roles = target_guild.roles
-        matching_roles = list(filter(lambda r: r.name.lower() == role_name.lower(), guild_roles))
-        if len(matching_roles) == 0:
-            # fall back to getting role by snowflake if possible
-            try:
-                role_id = int(role_name)
-                matching_roles = [await target_guild.get_role(role_id)]
-            except (ValueError, TypeError, NotFound):
-                msg = f'No role matching name "{role_name}" exists!'
-                return None, msg
-        if len(matching_roles) > 1:
-            warning_msg = f'Warning, multiple matches found for role "{role_name}"!'
-        else:
-            warning_msg = None
-        matched_role = matching_roles[0]
-        return matched_role, warning_msg
 
     @staticmethod
     def _generate_event_embed(guild: Guild, disciplined_user: Union[User, Member], event: dict):
@@ -238,6 +154,13 @@ class DisciplineCog(Cog, name='Discipline'):
 
     @staticmethod
     async def _validate_event_guild(event: dict, ctx: Context):
+        """
+        Ensure that the given event should be visible in the current context (by guild).
+
+        :param event: the event being evaluated
+        :param ctx: the context to check within
+        :return: True if the event should be visible, False otherwise.
+        """
         try:
             discord_guild_snowflake = int(event['discord_guild_snowflake'])
         except (TypeError, ValueError):
@@ -413,7 +336,23 @@ class DisciplineCog(Cog, name='Discipline'):
               f'had latest discipline of type {discipline_type_name} {content_str} pardoned.'
         await ctx.channel.send(msg)
 
-    @commands.Cog.listener()
+    async def _get_all_user_events(self, ctx: Context, user_obj: Union[User, Member]):
+        """
+        Gets all user events for the given user identifier.
+
+        :param ctx: The bot context to operate within
+        :param user_obj: the user to get events for
+        :return: A tuple of (event list, None) on success, or (None, err message) on failure
+        """
+        # TODO: switch this to a new endpoint that just gets active events?
+        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(
+            ctx.guild.id, user_obj.id
+        )
+        if err is not None:
+            return None, err
+        return discipline_event_list, None
+
+    @Cog.listener()
     async def on_member_ban(self, guild: Guild, user: Union[User, Member]):
         """
         handler for member ban events; checks if this was a bot ban, and if not (ban was made by a mod in the UI), then
@@ -458,7 +397,7 @@ class DisciplineCog(Cog, name='Discipline'):
                 ban_reason
             )
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_member_unban(self, guild: Guild, user: User) -> None:
         """
         TODO implement this
@@ -475,259 +414,202 @@ class DisciplineCog(Cog, name='Discipline'):
                 # TODO
                 pass
 
-    @commands.Cog.listener()
+    @Cog.listener()
     async def on_ready(self):
         print(f'ready: {self.bot.user.id}')
 
-    @commands.command()
-    async def ban(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+    @commands.group()
+    async def mod(self, ctx: Context):
+        """
+        The group definition for all discipline commands
+
+        :param ctx:
+        """
+        if ctx.subcommand_passed is None:
+            await ctx.channel.send('No moderation subcommand given.')
+
+    @mod.command()
+    async def ban(self, ctx: Context, user: User, *reason: str) -> None:
         """
         Carry out an indefinite ban for the given user.
 
         :param ctx: the context to work within
-        :param user_identifier: the user to ban
+        :param user: the user to ban
         :param reason: the reason for the ban
         """
         # just treat as a permanent temp ban
-        await self.tempban(ctx, user_identifier, None, *reason)
+        await self.tempban(ctx, user, None, *reason)
 
-    @commands.command()
-    async def tempban(self, ctx: Context, user_identifier: str, duration: Optional[str], *reason: str) -> None:
+    @mod.command()
+    async def tempban(self, ctx: Context, user: User, duration: Optional[str], *reason: str) -> None:
         """
         Temporarily ban the given user. The duration is specified as a string like "1h30m"
 
         :param ctx: the context to work within
-        :param user_identifier: the user to temporarily ban
+        :param user: the user to temporarily ban
         :param duration: the duration to ban the user for, or None for indefinite ban
         :param reason: the reason the user is being banned
         """
         reason = self._combine_reason(reason, 'no reason given')
-        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
-        if user_obj is None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-            return
         latest_discipline, _ = await self._is_user_disciplined(
-            ctx.guild, user_obj, BAN_DISCIPLINE_TYPE_NAME
+            ctx.guild, user, BAN_DISCIPLINE_TYPE_NAME
         )
         latest_id = latest_discipline['id']
         if latest_discipline is not None:
-            msg = f'<@!{ctx.author.id}> User {user_obj} is already actively banned by event ID=`{latest_id}`'
+            msg = f'<@!{ctx.author.id}> User {user} is already actively banned by event ID=`{latest_id}`'
             await ctx.channel.send(msg)
             return
         await self._apply_discipline(
             ctx,
-            user_obj,
+            user,
             BAN_DISCIPLINE_TYPE_NAME,
             duration,
             reason,
-            discord_discipline_coroutine=ctx.guild.ban(user_obj, reason=reason)
+            discord_discipline_coroutine=ctx.guild.ban(user, reason=reason)
         )
 
-    @commands.command()
-    async def unban(self, ctx: Context, user_identifier: str, *reason: str):
+    @mod.command()
+    async def unban(self, ctx: Context, user: User, *reason: str):
         """
         Removes a ban from the given user with the supplied reason.
 
         :param ctx: the context to work within
-        :param user_identifier: the user to unban
+        :param user: the user to unban
         :param reason: the reason for the unban action
         """
         reason = self._combine_reason(reason, 'no reason given')
-        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
-        if user_obj is None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-            return
         await self._pardon_discipline(
-            ctx, user_obj, BAN_DISCIPLINE_TYPE_NAME, ctx.guild.unban(user_obj, reason=reason)
+            ctx, user, BAN_DISCIPLINE_TYPE_NAME, ctx.guild.unban(user, reason=reason)
         )
 
-    @commands.command()
-    async def add_role(self, ctx: Context, user_identifier: str, role_name: str, *reason: str) -> None:
+    @mod.command()
+    async def add_role(self, ctx: Context, member: Member, role: Role, *reason: str) -> None:
         """
         Adds the discord role with the matching name to the given user.
 
         :param ctx: the context to work within
-        :param user_identifier: the user to add the role to
-        :param role_name: the name of the role to add
+        :param member: the member to add the role to
+        :param role: the role to add
         :param reason: the reason this role was added
         """
-        await self.temp_add_role(ctx, user_identifier, role_name, None, *reason)
+        await self.temp_add_role(ctx, member, role, None, *reason)
 
-    async def _prepare_role_changes(self, ctx: Context, user_identifier: str, role_name: str)\
-            -> Tuple[Optional[Member], Optional[Role]]:
-        """
-        Performs the necessary steps to retrieve user and role objects from a guild. Will send messages in the channel
-        if an error occurs and (None, None) will be returned.
-
-        :param ctx: the context to work within
-        :param user_identifier: the user to add the role to
-        :param role_name: the name of the role being changed
-        :return: A tuple of (Member Object, Role Object) on success, (None, None) on failure.
-        """
-        member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
-        if member_obj is None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> Unable to add role: {err}')
-            return None, None
-        matched_role, msg = await self._resolve_role(ctx.guild, role_name)
-        if matched_role is None:
-            # if we got an error, send message and exit
-            await ctx.channel.send(f'<@!{ctx.author.id}> Unable to find role: {msg}')
-            return None, None
-        elif msg is not None:
-            # if we got a warning, issue warning and continue
-            await ctx.channel.send(f'<@!{ctx.author.id}> {msg}')
-        return member_obj, matched_role
-
-    @commands.command()
+    @mod.command()
     async def temp_add_role(self,
                             ctx: Context,
-                            user_identifier: str,
-                            role_name: str,
+                            member: Member,
+                            role: Role,
                             duration: Optional[str],
                             *reason: str) -> None:
         """
         Temporarily add the given role to the given user. Role must already exist and is matched by name
 
         :param ctx: the context to operate within
-        :param user_identifier: the user to add the role to
-        :param role_name: the role to add by name or by snowflake
+        :param member: the member to add the role to
+        :param role: the role to add
         :param duration: the duration to apply the role for, or None for indefinite
         :param reason: the reason the role is being applied
         """
         reason = self._combine_reason(reason, 'no reason given')
-        member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
-        if member_obj is None or matched_role is None:
-            return
-        if matched_role in member_obj.roles:
-            full_username, member_id = str(member_obj), member_obj.id
-            await ctx.channel.send(
-                f'<@!{ctx.author.id}> User {full_username} [{member_id}] already has role with name "{role_name}"!'
-            )
-            return
         await self._apply_discipline(
             ctx,
-            member_obj,
+            member,
             ADD_ROLE_DISCIPLINE_TYPE_NAME,
             duration,
             reason,
-            discord_discipline_coroutine=member_obj.add_roles(matched_role, reason=reason),
-            discipline_content=role_name
+            discord_discipline_coroutine=member.add_roles(role, reason=reason),
+            discipline_content=str(role)
         )
 
-    @commands.command()
-    async def remove_role(self, ctx: Context, user_identifier: str, role_name: str, *reason: str) -> None:
+    @mod.command()
+    async def remove_role(self, ctx: Context, member: Member, role: Role, *reason: str) -> None:
         """
         Remove the role with the matching name from the given user.
 
         :param ctx: the discord bot context to operate in
-        :param user_identifier: the user to mute indefinitely
-        :param role_name: the name of the role to remove
+        :param member: the member to mute indefinitely
+        :param role: the role to remove
         :param reason: the reason this role was removed
         """
         reason = self._combine_reason(reason, 'no reason given')
-        member_obj, matched_role = await self._prepare_role_changes(ctx, user_identifier, role_name)
-        if member_obj is None or matched_role is None:
-            return
         await self._pardon_discipline(
             ctx,
-            member_obj,
+            member,
             ADD_ROLE_DISCIPLINE_TYPE_NAME,
-            member_obj.remove_roles(matched_role, reason=reason)
+            member.remove_roles(role, reason=reason)
         )
 
-    @commands.command()
-    async def mute(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+    @mod.command()
+    async def mute(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Applies the configured mute role to the given user for the given reason indefinitely.
 
         :param ctx: the discord bot context to operate in
-        :param user_identifier: the user to mute indefinitely
+        :param member: the member to mute indefinitely
         :param reason: the reason for the mute
         """
-        await self.tempmute(ctx, user_identifier, None, *reason)
+        await self.tempmute(ctx, member, None, *reason)
 
-    @commands.command()
-    async def tempmute(self, ctx: Context, user_identifier: str, duration: Optional[str], *reason: str) -> None:
+    @mod.command()
+    async def tempmute(self, ctx: Context, member: Member, duration: Optional[str], *reason: str) -> None:
         """
         Temporarily adds the configured mute role to the given user for the given reason.
 
         :param ctx: the discord bot context to operate in
-        :param user_identifier: the user to mute
+        :param member: the user to mute
         :param duration: the duration the mute should hold for
         :param reason: the reason this user is being muted
         """
-        await self.temp_add_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, duration, *reason)
+        mute_role = ctx.guild.get_role(MUTE_DISCORD_ROLE_ID)
+        await self.temp_add_role(ctx, member, mute_role, duration, *reason)
 
-    @commands.command()
-    async def unmute(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+    @mod.command()
+    async def unmute(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Removes the configured mute role from the given user.
 
         :param ctx: the discord bot context to operate in
-        :param user_identifier: the user to remove the mute role from
+        :param member: the member to remove the mute role from
         :param reason: the reason for the removal of the mute role
         """
-        await self.remove_role(ctx, user_identifier, MUTE_DISCORD_ROLE_NAME, *reason)
+        mute_role = ctx.guild.get_role(MUTE_DISCORD_ROLE_ID)
+        await self.remove_role(ctx, member, mute_role, *reason)
 
-    @commands.command()
-    async def kick(self, ctx: Context, user_identifier: str, *reason: str) -> None:
+    @mod.command()
+    async def kick(self, ctx: Context, member: Member, *reason: str) -> None:
         """
         Kicks the given user from this discord guild. This is will be represented in the discipline database as a
         discipline of the configured kick type that is immediately terminated.
 
         :param ctx: the bot context to operate in
-        :param user_identifier: the user to kick form the guild
+        :param member: the member to kick form the guild
         :param reason: the reason for this action
         """
         reason = self._combine_reason(reason, 'no reason given')
-        member_obj, err = await self._resolve_member(ctx.guild, user_identifier)
-        if member_obj is None:
-            await ctx.channel.send(f'<@!{ctx.author.id}> Unable to kick user: {err}')
-            return
         await self._apply_discipline(
             ctx=ctx,
-            user_object=member_obj,
+            user_object=member,
             discipline_type_name=KICK_DISCIPLINE_TYPE_NAME,
             duration='0s',
             reason=reason,
-            discord_discipline_coroutine=ctx.guild.kick(member_obj, reason=reason)
+            discord_discipline_coroutine=ctx.guild.kick(member, reason=reason)
         )
 
-    async def _get_all_user_events(self, ctx: Context, user_obj: Union[User, Member]):
-        """
-        Gets all user events for the given user identifier.
-
-        :param ctx: The bot context to operate within
-        :param user_obj: the user to get events for
-        :return: A tuple of (event list, None) on success, or (None, err message) on failure
-        """
-
-        # TODO: switch this to a new endpoint that just gets active events?
-        discipline_event_list, err = await self._backend_client.discipline_event_get_all_for_user(
-            ctx.guild.id, user_obj.id
-        )
-        if err is not None:
-            return None, err
-        return discipline_event_list, None
-
-    @commands.command()
-    async def status(self, ctx: Context, user_identifier: str) -> None:
+    @mod.command()
+    async def status(self, ctx: Context, user: User) -> None:
         """
         Queries the status of the given user. Checks for and lists any active discipline events (excluding pardoned
         or terminated ones).
 
         :param ctx: the discord bot context to operate in
-        :param user_identifier: the user to query the status of
+        :param user: the user to query the status of
         """
-        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
-        if user_obj is None:
-            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-        discipline_event_list, err = await self._get_all_user_events(ctx, user_obj)
+        discipline_event_list, err = await self._get_all_user_events(ctx, user)
         if err is not None:
             return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
         output_embed = Embed(
-            title='{} Discipline Status'.format(str(user_obj)),
-            description='The list of active discipline events affecting user {}'.format(str(user_obj))
+            title='{} Discipline Status'.format(str(user)),
+            description='The list of active discipline events affecting user {}'.format(str(user))
         )
         relevant_count = 0
         for event in discipline_event_list:
@@ -766,42 +648,39 @@ class DisciplineCog(Cog, name='Discipline'):
                 inline=False
             )
         if relevant_count == 0:
-            msg = 'User {} does not have any active discipline events'.format(str(user_obj))
+            msg = 'User {} does not have any active discipline events'.format(str(user))
             await ctx.channel.send(f'<@!{ctx.author.id}> {msg}')
         else:
             await ctx.channel.send(content=f'<@!{ctx.author.id}>', embed=output_embed)
 
-    @commands.command()
-    async def history(self, ctx: Context, user_identifier: str, count: int = 10):
+    @mod.command()
+    async def history(self, ctx: Context, user: User, count: int = 10):
         """
         Retrieves up to count most recent discipline events for the given user. Count is 10 if not
         provided.
 
         :param ctx: the bot context to operate within
-        :param user_identifier: the user to look up
+        :param user: the user to look up
         :param count: the maximum amount of items to retrieve, 10 by default and 100 max.
         """
-        user_obj, err = await self._resolve_user(ctx.guild, user_identifier, database_fallback=True)
-        if user_obj is None:
-            return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
-        discipline_event_list, err = await self._get_all_user_events(ctx, user_obj)
+        discipline_event_list, err = await self._get_all_user_events(ctx, user)
         if err is not None:
             return await ctx.channel.send(f'<@!{ctx.author.id}> {err}')
         await ctx.channel.send(
-            f'<@!{ctx.author.id}> The discipline event history of user {user_obj} may be seen below, newest first:'
+            f'<@!{ctx.author.id}> The discipline event history of user {user} may be seen below, newest first:'
         )
         for i, event in enumerate(discipline_event_list):
             if i + 1 >= count:
                 break
             if not await self._validate_event_guild(event, ctx):
                 continue
-            output_embed = self._generate_event_embed(ctx.guild, user_obj, event)
+            output_embed = self._generate_event_embed(ctx.guild, user, event)
             await ctx.channel.send(
                 content='Event `{}`:'.format(event['id']),
                 embed=output_embed
             )
 
-    @commands.command()
+    @mod.command()
     async def event_details(self, ctx: Context, event_id: str) -> None:
         """
         Retrieves the details for a particular discipline event and responds to the requester with

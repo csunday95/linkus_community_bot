@@ -1,5 +1,5 @@
 
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 import aiohttp
 import uuid
 from datetime import datetime
@@ -453,3 +453,31 @@ class BotBackendClient:
                 return await response.json(), None
         except aiohttp.ClientConnectionError:
             return None, 'Unable to contact database'
+
+    async def configuration_update_guild_configuration(self,
+                                                       guild_snowflake: int,
+                                                       update_dict: Dict[str, Any] = None,
+                                                       discipline_update_dict: Dict[str, Any] = None,
+                                                       reaction_update_dict: Dict[str, Any] = None) -> Optional[str]:
+        """
+
+        :param guild_snowflake:
+        :param update_dict: a dictionary mapping parameter name to the new value
+        :param discipline_update_dict: a dictionary mapping of name to new value for discipline configuration
+        :param reaction_update_dict: a dictionary mapping of name to new value for reaction role configuration
+        :return: None on success, an error message on failure
+        """
+        patch_config_req_url = self._api_url + f'configuration/bot-configuration/{guild_snowflake}/'
+        patch_data = {} if update_dict is None else update_dict
+        if discipline_update_dict is not None:
+            patch_data['discipline_configuration'] = discipline_update_dict
+        if reaction_update_dict is not None:
+            patch_data['reaction_configuration'] = reaction_update_dict
+        try:
+            async with self._session.patch(patch_config_req_url, json=patch_data) as response:
+                if response.status != 200:
+                    fmt = 'Encountered an HTTP error creating guild configuration as {url}: {status}'
+                    return fmt.format(url=patch_config_req_url, status=response.status)
+                return None
+        except aiohttp.ClientConnectionError:
+            return 'Unable to contact database'
